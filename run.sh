@@ -11,6 +11,6 @@ do
     python3 serial2.py
 
     echo "[`date`] Script bitti. 10 saniye sonra tekrar denenecek."
-    sleep 1000
+    sleep 10
 done
 
