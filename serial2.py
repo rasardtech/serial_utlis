@@ -5,7 +5,7 @@ import time
 import re
 from collections import deque
 
-ODOO_URL_TEMPLATE = "https://altinayet-stage-22335048.dev.odoo.com//terazi/get/{mrp_id}/{weight}"
+ODOO_URL_TEMPLATE = "https://altinayet-stage-22335048.dev.odoo.com/terazi/get/{mrp_id}/{weight}"
 GET_JOB_URL = "https://altinayet-stage-22335048.dev.odoo.com/terazi/get_scale_job/1"   # scale_id'yi uygun gir!
 
 STABLE_COUNT = 20
