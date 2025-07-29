@@ -1,124 +1,42 @@
 import serial
-import time
+import sys
 
-# Constants for AD-2000 protocol
-STX = 0x02
-ETX = 0x03
-XON = 0x11
-XOFF = 0x13
+# GÖNDERMEK İSTEDİĞİN ETİKET KOMUTU (örneğin Odoo'dan aldığın)
+LABEL_COMMAND = b"""
+SIZE 60 mm,40 mm
+GAP 2 mm,0 mm
+CLS
+TEXT 20,30,"3",0,1,1,"SUCUK KOMBI"
+TEXT 20,70,"3",0,1,1,"Miktar: 382 gr"
+TEXT 20,110,"3",0,1,1,"Lot: A-20250730-001"
+TEXT 20,150,"3",0,1,1,"Tarih: 2025-07-27 18:10:28"
+TEXT 20,190,"3",0,1,1,"SKT: 2025-07-27 18:10:28"
+PRINT 1,1
+"""
 
-# BCC calculation with substitution rules
-def calculate_bcc(data: bytes) -> int:
-    bcc = 0
-    for b in data:
-        bcc ^= b
-    if bcc == 0x00:
-        return 0x20
-    elif bcc == 0x11:
-        return 0x31
-    elif bcc == 0x13:
-        return 0x33
-    elif bcc == 0x02:
-        return 0x22
-    elif bcc == 0x03:
-        return 0x23
-    return bcc
+# Seri port ayarları (gerekirse portu güncelle!)
+SERIAL_PORT = '/dev/ttyACM0'
+BAUDRATE = 9600
 
-# Frame construction
-def build_frame(cmd_type: bytes, cmd: bytes, data: bytes = b'') -> bytes:
-    body = cmd_type + cmd + data
-    bcc = calculate_bcc(body)
-    return bytes([STX]) + body + bytes([ETX]) + bytes([bcc])
-
-# Send command frame and read response
-def send_ad_command(ser, cmd_type: bytes, cmd: bytes, data: bytes = b''):
-    ser.write(bytes([XOFF]))
-    time.sleep(0.02)
-
-    frame = build_frame(cmd_type, cmd, data)
-    print(f"📤 Sending frame: {frame.hex(' ')}")
-    ser.write(frame)
-
-    # Read response
-    response = bytearray()
-    start_found = False
-    start = time.time()
-    while time.time() - start < 1.0:
-        b = ser.read(1)
-        if not b:
-            continue
-        byte = b[0]
-        if not start_found:
-            if byte == STX:
-                start_found = True
-                response.append(byte)
-        else:
-            response.append(byte)
-            if byte == ETX:
-                bcc = ser.read(1)
-                if bcc:
-                    response.append(bcc[0])
-                break
-
-    ser.write(bytes([XON]))
-
-    if len(response) < 4:
-        print("⚠️ Incomplete response.")
-        return response
-
-    # Check BCC
-    body = response[1:-2]  # Exclude STX and ETX
-    expected_bcc = calculate_bcc(body)
-    actual_bcc = response[-1]
-
-    if expected_bcc != actual_bcc:
-        print(f"⚠️ BCC mismatch: expected 0x{expected_bcc:02X}, got 0x{actual_bcc:02X}")
-    else:
-        print("✅ BCC OK")
-
-    return bytes(response)
-
-# Main function: sends RF and RW commands
-def main():
-    port = "/dev/ttyUSB0"
-    ser = serial.Serial(
-        port=port,
-        baudrate=19200,
-        bytesize=serial.EIGHTBITS,
-        parity=serial.PARITY_EVEN,
-        stopbits=serial.STOPBITS_ONE,
-        timeout=0.1
-    )
-
-    print("🔍 Requesting software version (RF)...")
-    response = send_ad_command(ser, b'R', b'F')
-    print("📦 Raw response:", response)
+def print_label_to_topway(label_command, port=SERIAL_PORT, baud=BAUDRATE):
     try:
-        if response and response[1:3] == b'0F':
-            version = response[3:-2].decode(errors="ignore")
-            print("📌 Software version:", version)
-        elif response and response[1:2] == b'2':
-            print("❌ RF command not supported")
-        else:
-            print("⚠️ No valid version info found.")
+        with serial.Serial(
+            port=port,
+            baudrate=baud,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=2
+        ) as ser:
+            print(f"Yazıcıya etiket gönderiliyor ({port}, {baud} baud)...")
+            # TSPL komutunu satır satır gönder, her satırdan sonra kısa bekle (bazı yazıcılar için güvenli)
+            for line in label_command.splitlines():
+                if line.strip():
+                    ser.write(line.strip() + b'\r\n')
+            print("Etiket yazdırma komutu gönderildi. (Yazıcıdan çıktı aldıysan her şey çalışıyor demektir!)")
     except Exception as e:
-        print("❌ Error while parsing version:", e)
-
-    print("\n⚖️ Requesting weight data (RW)...")
-    response = send_ad_command(ser, b'R', b'W')
-    print("📦 Raw response:", response)
-    try:
-        if response and response[1:2] == b'0':
-            data_str = response[2:-2].decode(errors="ignore")
-            print("✅ Weight data:", data_str)
-        elif response and response[1:2] == b'2':
-            print("❌ RW command not supported")
-        else:
-            print("⚠️ No valid weight info found.")
-    except Exception as e:
-        print("❌ Error while parsing weight:", e)
-
-    ser.close()
+        print("Etiket yazdırma hatası:", e)
+        sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    print_label_to_topway(LABEL_COMMAND)
