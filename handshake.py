@@ -33,4 +33,4 @@ def yaziciya_text_gonder(port, text):
     print("Metin yazıcıya gönderildi.")
 
 # Kullanım:
-yaziciya_text_gonder("/dev/ttyACM2", "Deneme Yazısı\nAğırlık: 1,000 KG\nS.T.T.: 29.11.2025")
+yaziciya_text_gonder("/dev/ttyACM1", "Deneme Yazısı\nAğırlık: 1,000 KG\nS.T.T.: 29.11.2025")
