@@ -27,8 +27,8 @@ from PIL import Image, ImageDraw, ImageFont
 GET_JOB_URL = "https://altinayet-stage-22335048.dev.odoo.com/terazi/get_scale_job/1"   # scale_id'yi güncelle
 ODOO_URL_TEMPLATE = "https://altinayet-stage-22335048.dev.odoo.com/terazi/get/{mrp_id}/{weight}"
 
-STABLE_COUNT = 20
-SENSITIVITY_GRAM = 8
+STABLE_COUNT = 5  # Teraziden gelen ağırlık verilerinin kararlılığı için gereken ölçüm sayısı
+SENSITIVITY_GRAM = 20
 
 # =========================
 # Yazıcı (ESC 'V' raster) Ayarları
