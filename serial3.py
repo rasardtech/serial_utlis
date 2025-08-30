@@ -134,6 +134,38 @@ def _find_font_by_names(names: list[str]) -> Optional[str]:
             continue
     return None
 
+def make_ad2k_frame(command_bytes):
+    frame = b'\x02' + command_bytes + b'\x03'
+    bcc = 0
+    for b in frame:
+        bcc ^= b
+    return frame + bytes([bcc])
+
+def send_ad2k_command(ser, command_bytes, response_timeout=0.6):
+    try:
+        ser.reset_input_buffer()
+    except Exception:
+        pass
+    try:
+        ser.write(b'\x13')  # Xoff
+    except Exception:
+        return b""
+    time.sleep(0.02)
+    frame = make_ad2k_frame(command_bytes)
+    ser.write(frame)
+    time.sleep(0.02)
+    ser.write(b'\x11')  # Xon
+    ser.flush()
+    resp = b""
+    start = time.time()
+    while time.time() - start < response_timeout:
+        chunk = ser.read(ser.in_waiting or 1)
+        if chunk:
+            resp += chunk
+        else:
+            time.sleep(0.01)
+    return resp
+
 def resolve_sans_serif_paths() -> tuple[Optional[str], Optional[str]]:
     normal_candidates = [
         "segoeui.ttf", "arial.ttf",
