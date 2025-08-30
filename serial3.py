@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-# Terazi Etiket Yazıcı – Tek Dosya (başlangıç noktası kalibrasyonu + font büyütme)
+# Terazi Etiket Yazıcı – Tek Dosya (başlık biraz yukarı + font 1 tık büyük)
 # - Sans Serif font (normal + bold) zorunlu (sistem TTF taraması).
-# - Ürün adı barkodun hemen üstünde sola yaslı.
+# - Ürün adı barkodun hemen üstünde sola yaslı; başlık için ekstra yukarı taşıma ayarı eklendi.
 # - “ALERJEN UYARISI …” satırı kalın (bold).
-# - Fiziksel konum kalibrasyonu: aşağı/sola canlı ayar (tüm sayfayı kaydırır).
+# - Fiziksel konum kalibrasyonu: aşağı/sola canlı ayar (tüm sayfa kaydırır).
 # - İçerik başlangıç noktası (iç ofset): içerik bloğunu mm cinsinden aşağı/sağa kaydırma (sadece içerik).
 # - Debug çerçevesi ve başlangıç-noktası işareti ile görsel kontrol.
 # - COM6 terazi fallback, ham veri görünümü, POLL/LISTEN okuma modları.
-# - 15 kg üzeri veya "400000.00 g" gibi hatalı ölçüleri yok sayar.
+# - 25 kg üzeri veya "400000.00 g" gibi hatalı ölçüleri yok sayar (MAX_REALISTIC_GRAMS=25000).
 # - Odoo START/DONE ve print_series akışları.
-#
-# Gereksinimler:
-#   pip install pillow pyserial requests
 
 import os
 import re
@@ -41,7 +38,7 @@ ODOO_URL_TEMPLATE = "https://altinayet-stage-22335048.dev.odoo.com/terazi/get/{m
 
 STABLE_COUNT = 5
 SENSITIVITY_GRAM = 20
-MAX_REALISTIC_GRAMS = 25000  # 15 kg üstünü yok say
+MAX_REALISTIC_GRAMS = 25000  # 25 kg üstünü yok say
 
 # =========================
 # Yazıcı (ESC 'V' raster) Ayarları
@@ -69,7 +66,7 @@ FEED_AFTER_LINES = 0  # Başta boş satır istemediğimiz için 0
 # =========================
 REQ_W = 748
 REQ_H = 748
-BOTTOM_FORBID = 160   # alt sarı bantla çakışmayı önlemek için arttırıldı
+BOTTOM_FORBID = 160   # alt sarı bantla çakışmayı önlemek için
 ROTATE_180 = True
 THRESHOLD = 192
 INVERT_BW = False
@@ -92,19 +89,25 @@ def _env_float(name: str, default_val: float) -> float:
         return default_val
 
 # Varsayılan fiziksel kalibrasyon (GUI’den canlı değiştirilecek)
-PHYS_SHIFT_DOWN_MM = _env_float("PHYS_SHIFT_DOWN_MM", _env_float("V_SHIFT_MM", 10.0))  # 10 mm aşağı (fiziksel)
-H_SHIFT_MM = _env_float("H_SHIFT_MM", 3.0)  # merkezden sola 3.0 mm
+# Not: Bu değerler tüm sayfayı kaydırır. Kullanıcı "-13.0" ile iyi sonuç aldığını söyledi.
+PHYS_SHIFT_DOWN_MM = -13.0  # mm, fiziksel aşağı (+) – ROTATE_180 mantığı içinde işlenir
+H_SHIFT_MM = -5.0           # mm, merkezden sola (+) – pad aşamasında uygulanır
 
 def mm_to_dots(mm: float) -> int:
     return int(round(mm * DPMM))
 
-# İç yerleşim (px) – metin büyüdüğü için blokları da hafif aşağı aldık
-LEFT_MARGIN = 8               # içeriği sola yakın başlat
-LEFT_BLOCK_Y = 148            # 140 -> 148 (biraz aşağı)
-LEFT_BLOCK_GAP = 48           # 44 -> 48 (satır arası büyüdü)
+# İç yerleşim (px)
+LEFT_MARGIN = 8
+LEFT_BLOCK_Y = 148
+LEFT_BLOCK_GAP = 48
 LEFT_COL_WIDTH = 270
 COL_GAP = 16
 RIGHT_BARCODE_HEIGHT = 108
+
+# Başlık (ürün adı) için ekstra boşluk (barkod üstünden başlığın ne kadar yukarıda olacağı)
+# Daha büyük değer = başlık daha yukarı (barkoda göre mesafe artar)
+PRODUCT_TITLE_GAP_MM = float(os.getenv("PRODUCT_TITLE_GAP_MM", "2.0"))  # varsayılan 2.0 mm
+PRODUCT_TITLE_GAP_PX = mm_to_dots(PRODUCT_TITLE_GAP_MM)
 
 # =========================
 # Sans Serif font çözümleme (normal + bold)
@@ -164,8 +167,8 @@ def load_font_exact(path: Optional[str], size: int) -> ImageFont.ImageFont:
             pass
     return ImageFont.load_default()
 
-def get_fonts_for_sizes(size_title=32, size_sub=26, size_label=22, size_text=18, size_bar=18, payload_font_path: Optional[str] = None):
-    # 32px≈11.35pt, 26px≈9.22pt, 22px≈7.80pt, 18px≈6.39pt (203dpi) – 3pt sınırından oldukça güvenli
+def get_fonts_for_sizes(size_title=34, size_sub=26, size_label=22, size_text=18, size_bar=18, payload_font_path: Optional[str] = None):
+    # size_title 32→34 px (isteğe göre 1 tık büyütüldü). 34 px ≈ 12.1 pt @203 dpi
     normal_base = None
     bold_base = None
     if not FORCE_SANS_SERIF and payload_font_path and os.path.exists(payload_font_path):
@@ -295,7 +298,7 @@ def compose_label(
 ) -> Image.Image:
     payload_font_path = data.get("font_path")
     fonts = get_fonts_for_sizes(
-        size_title=32, size_sub=26, size_label=22, size_text=18, size_bar=18,
+        size_title=34, size_sub=26, size_label=22, size_text=18, size_bar=18,
         payload_font_path=payload_font_path
     )
     f_title = fonts["title"]; f_sub = fonts["sub"]; f_label = fonts["label"]; f_text = fonts["text"]; f_text_b = fonts["text_b"]; f_bar = fonts["bar"]
@@ -306,7 +309,6 @@ def compose_label(
     # Debug: dış çerçeve ve içerik başlangıç işareti
     if debug_frame:
         draw.rectangle([1, 1, width_dots-2, height_dots-2], outline=(0,0,0), width=2)
-        # içerik başlangıç noktası
         x0_mark = LEFT_MARGIN + inner_dx_dots
         y0_mark = LEFT_BLOCK_Y + inner_dy_dots
         draw.line([x0_mark-10, y0_mark, x0_mark+10, y0_mark], fill=(0,0,0), width=1)
@@ -336,7 +338,7 @@ def compose_label(
     bar_top = y0
     bar_h = RIGHT_BARCODE_HEIGHT
 
-    # Ürün adı – barkodun hemen üstünde, sola yaslı; tek satıra sığması için 32→22 px arası küçült
+    # Ürün adı – barkodun üstünde; 34→22 px arası küçült; GAP büyütülerek başlık biraz daha yukarı alındı
     product = str(data.get("product_name", "") or "").strip()
     if product:
         size = f_title.size
@@ -344,7 +346,7 @@ def compose_label(
         while size >= 22 and draw.textlength(product, font=load_font_exact(normal_path, size)) > right_w:
             size -= 1
         f_prod = load_font_exact(normal_path, size)
-        prod_y = max(0, bar_top - f_prod.size - 4)  # barkodun hemen üstü, ~4 px boşluk
+        prod_y = max(4, bar_top - f_prod.size - PRODUCT_TITLE_GAP_PX)  # önceki -4 px yerine ~2.0 mm (varsayılan) boşluk
         draw.text((right_x, prod_y), product, font=f_prod, fill=(0,0,0))
 
     # Barkod
@@ -503,7 +505,7 @@ def send_label_image_to_printer(
         debug_frame=debug_frame
     )
 
-    # Fiziksel aşağı indirme (mm → dot). ROTATE_180=True iken fiziksel aşağı = dy negatif.
+    # Fiziksel aşağı/sola kaydırma
     if PHYS_SHIFT_DOWN_MM != 0:
         dy = (-mm_to_dots(PHYS_SHIFT_DOWN_MM)) if ROTATE_180 else (mm_to_dots(PHYS_SHIFT_DOWN_MM))
         img = shift_image_vertical(img, dy=dy, fill=(255, 255, 255))
@@ -717,7 +719,6 @@ class LabelApp(tk.Tk):
         self.geometry("1140x860")
         self.minsize(980, 700)
 
-        # Paylaşılan durum
         self.stop_event = threading.Event()
         self.log_q: queue.Queue[str] = queue.Queue()
         self.raw_q: queue.Queue[str] = queue.Queue()
@@ -726,16 +727,15 @@ class LabelApp(tk.Tk):
         self.ser_yazici: Optional[serial.Serial] = None
 
         self.current_mrp_id: Optional[Any] = None
-        self.sending_data_remote = False  # Odoo 'start/done'
-        self.sending_data_local = False   # GUI Start/Done
-        self.print_single_mode = False    # Odoo 'print_single'
+        self.sending_data_remote = False
+        self.sending_data_local = False
+        self.print_single_mode = False
         self.preview_only = tk.BooleanVar(value=False)
 
         self.last_action_id: Optional[str] = None
         self.processed_series_tokens: set[str] = set()
         self.MAX_TOKEN_CACHE = 200
 
-        # Tartı durumu
         self.stable_queue: deque[int] = deque(maxlen=STABLE_COUNT)
         self.last_printed_weight: Optional[int] = None
         self.sent_last_weight: Optional[int] = None
@@ -746,23 +746,19 @@ class LabelApp(tk.Tk):
         self.scale_port_var = tk.StringVar(value="(yok)")
         self.printer_port_var = tk.StringVar(value="(yok)")
 
-        # Terazi seri ayarları
         self.serial_baud_var = tk.StringVar(value=str(SCL_BAUD))
-        self.serial_parity_var = tk.StringVar(value="ODD")  # NONE/EVEN/ODD
+        self.serial_parity_var = tk.StringVar(value="ODD")
         self.xonxoff_var = tk.BooleanVar(value=False)
-        self.poll_mode = tk.BooleanVar(value=True)          # True: komutla poll, False: ham dinle
-        self.show_raw = tk.BooleanVar(value=True)           # Ham veri penceresi
+        self.poll_mode = tk.BooleanVar(value=True)
+        self.show_raw = tk.BooleanVar(value=True)
 
-        # Fiziksel ayarların canlı kontrolü (tüm sayfa kayar)
         self.vert_mm_var = tk.DoubleVar(value=PHYS_SHIFT_DOWN_MM)  # aşağı (+)
         self.horz_mm_var = tk.DoubleVar(value=H_SHIFT_MM)          # sola (+)
 
-        # İçerik başlangıç noktası (sadece içerik kayar)
-        self.inner_down_mm_var = tk.DoubleVar(value=0.0)  # aşağı (+)
-        self.inner_right_mm_var = tk.DoubleVar(value=0.0) # sağa (+)
-        self.debug_frame_var = tk.BooleanVar(value=False) # çerçeve + cross
+        self.inner_down_mm_var = tk.DoubleVar(value=0.0)
+        self.inner_right_mm_var = tk.DoubleVar(value=0.0)
+        self.debug_frame_var = tk.BooleanVar(value=False)
 
-        # Önizleme
         self.preview_canvas = None
         self.preview_photo = None
 
@@ -774,10 +770,10 @@ class LabelApp(tk.Tk):
         self.job_thread.start()
         self.scale_thread.start()
 
-        # Başlangıç log
         self._log(f"Sans Serif -> normal: {SANS_NORMAL_PATH or '(yok)'} | bold: {SANS_BOLD_PATH or '(yok)'} | FORCE_SANS_SERIF={FORCE_SANS_SERIF}")
         self._log(f"Fiziksel ofset başlangıç: aşağı={self.vert_mm_var.get()} mm, sola={self.horz_mm_var.get()} mm")
         self._log("İpucu: Debug Çerçeve'yi açıp başlangıç noktasını (artı işareti) etiket üzerinde kontrol edin.")
+        self._log(f"Başlık GAP: {PRODUCT_TITLE_GAP_MM:.2f} mm (env PRODUCT_TITLE_GAP_MM ile değiştirilebilir)")
 
         self.after(100, self._gui_pulse)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -812,20 +808,18 @@ class LabelApp(tk.Tk):
         ttk.Radiobutton(settings, text="LISTEN (Ham Dinle)", variable=self.poll_mode, value=False).grid(row=0, column=8, sticky="w", padx=(4,0))
         ttk.Checkbutton(settings, text="Ham Veriyi Göster", variable=self.show_raw).grid(row=0, column=9, padx=(16,0))
 
-        # Fiziksel konum kalibrasyonu paneli (tüm sayfa)
         cal = ttk.LabelFrame(self, text="Fiziksel Konum Kalibrasyonu (Tüm Sayfa) – mm")
         cal.pack(fill="x", padx=pad, pady=(0, pad))
         ttk.Label(cal, text="Aşağı (+):").grid(row=0, column=0, sticky="e")
-        ttk.Spinbox(cal, from_=0, to=30, increment=0.5, textvariable=self.vert_mm_var, width=6).grid(row=0, column=1, padx=(4,16))
+        ttk.Spinbox(cal, from_=-30, to=30, increment=0.5, textvariable=self.vert_mm_var, width=6).grid(row=0, column=1, padx=(4,16))
         ttk.Label(cal, text="Sola (+):").grid(row=0, column=2, sticky="e")
-        ttk.Spinbox(cal, from_=0, to=30, increment=0.5, textvariable=self.horz_mm_var, width=6).grid(row=0, column=3, padx=(4,16))
+        ttk.Spinbox(cal, from_=-30, to=30, increment=0.5, textvariable=self.horz_mm_var, width=6).grid(row=0, column=3, padx=(4,16))
         ttk.Button(cal, text="Uygula", command=self._apply_physical_shifts).grid(row=0, column=4, padx=(4,12))
         ttk.Button(cal, text="Aşağı +0.5", command=lambda: self._nudge_phys(0.5, 0)).grid(row=0, column=5, padx=2)
         ttk.Button(cal, text="Yukarı -0.5", command=lambda: self._nudge_phys(-0.5, 0)).grid(row=0, column=6, padx=2)
         ttk.Button(cal, text="Sola +0.5", command=lambda: self._nudge_phys(0, 0.5)).grid(row=0, column=7, padx=2)
         ttk.Button(cal, text="Sağa -0.5", command=lambda: self._nudge_phys(0, -0.5)).grid(row=0, column=8, padx=2)
 
-        # İçerik başlangıç noktası (yalnız içerik)
         inner = ttk.LabelFrame(self, text="İçerik Başlangıç Noktası (Sadece İçerik) – mm")
         inner.pack(fill="x", padx=pad, pady=(0, pad))
         ttk.Label(inner, text="Aşağı (+):").grid(row=0, column=0, sticky="e")
@@ -953,13 +947,13 @@ class LabelApp(tk.Tk):
     # ---------- Fiziksel / İç ofset uygulama ----------
     def _apply_physical_shifts(self):
         global PHYS_SHIFT_DOWN_MM, H_SHIFT_MM
-        PHYS_SHIFT_DOWN_MM = max(0.0, float(self.vert_mm_var.get()))
-        H_SHIFT_MM = max(0.0, float(self.horz_mm_var.get()))
+        PHYS_SHIFT_DOWN_MM = float(self.vert_mm_var.get())
+        H_SHIFT_MM = float(self.horz_mm_var.get())
         self._log(f"Fiziksel ofset uygulandı: aşağı={PHYS_SHIFT_DOWN_MM:.2f} mm, sola={H_SHIFT_MM:.2f} mm")
 
     def _nudge_phys(self, d_down_mm: float, d_left_mm: float):
-        self.vert_mm_var.set(max(0.0, self.vert_mm_var.get() + d_down_mm))
-        self.horz_mm_var.set(max(0.0, self.horz_mm_var.get() + d_left_mm))
+        self.vert_mm_var.set(self.vert_mm_var.get() + d_down_mm)
+        self.horz_mm_var.set(self.horz_mm_var.get() + d_left_mm)
         self._apply_physical_shifts()
 
     def _apply_inner_offsets(self):
@@ -1188,7 +1182,7 @@ class LabelApp(tk.Tk):
                 feed_after_lines=FEED_AFTER_LINES,
                 preview_only=self.preview_only.get(),
                 on_preview_image=self._update_preview_image,
-                inner_dx_mm=self.inner_right_mm_var.get(),   # içerik sağa (+) – başlangıç noktası
+                inner_dx_mm=self.inner_right_mm_var.get(),   # içerik sağa (+)
                 inner_dy_mm=self.inner_down_mm_var.get(),    # içerik aşağı (+)
                 debug_frame=self.debug_frame_var.get()
             )
@@ -1270,7 +1264,6 @@ class LabelApp(tk.Tk):
         threading.Thread(target=run, daemon=True).start()
 
     def _gui_pulse(self):
-        # Günlük
         while True:
             try:
                 line = self.log_q.get_nowait()
@@ -1282,7 +1275,6 @@ class LabelApp(tk.Tk):
                 self.log_text.see("end")
                 self.log_text.configure(state="disabled")
 
-        # Ham veri
         while True:
             try:
                 raw = self.raw_q.get_nowait()
