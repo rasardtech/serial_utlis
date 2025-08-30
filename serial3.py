@@ -6,7 +6,7 @@ from __future__ import annotations
 # - Odoo "start" ile stabilize olunca otomatik baskı; "print_series" akışını uygular.
 # - Tare/Zero tuşları GUI üzerinden gönderilebilir.
 # - Preview Only ile yazıcıya göndermeden önizleme üretilebilir.
-# - Teraziden ham veri görüntüleme (debug) ve POLL/LISTEN modları eklendi.
+# - Teraziden ham veri görüntüleme (debug) ve POLL/LISTEN modları.
 #
 # Gereksinimler: pip install pillow pyserial requests
 # Not: Windows ve Linux/Mac için port keşfi içerir.
@@ -38,6 +38,7 @@ ODOO_URL_TEMPLATE = "https://altinayet-stage-22335048.dev.odoo.com/terazi/get/{m
 
 STABLE_COUNT = 5
 SENSITIVITY_GRAM = 20
+MAX_REALISTIC_GRAMS = 15000  # 15 kg üstünü yok say
 
 # =========================
 # Yazıcı (ESC 'V' raster) Ayarları
@@ -111,8 +112,8 @@ SCL_BAUD = 19200
 SCL_PARITY = serial.PARITY_ODD
 SCL_TIMEOUT = 0.5
 
-# Windows'ta COM1'i varsayılan tercih et (fallback)
-SCL_PORT_FALLBACK = "COM1" if IS_WINDOWS else "/dev/ttyUSB0"
+# Windows'ta COM6'yı varsayılan tercih et (fallback)
+SCL_PORT_FALLBACK = "COM6" if IS_WINDOWS else "/dev/ttyUSB0"
 
 # =========================
 # Görsel/Raster Yardımcıları
@@ -448,11 +449,15 @@ def send_ad2k_command(ser, command_bytes, response_timeout=1.0):
             time.sleep(0.01)
     return resp
 
-# Daha esnek tartı satırı ayrıştırıcı
+# Daha esnek tartı satırı ayrıştırıcı + üst limit filtresi
 def parse_weight_line(line):
     if isinstance(line, bytes):
         line = line.decode(errors="ignore")
     s = (line or "").strip()
+
+    # Tam olarak "400000.00 g" (ve varyasyonlarını) gelen hatalı değerleri anında yok say
+    if re.search(r'\b400000(?:[.,]00)?\s*g\b', s, re.IGNORECASE):
+        return None
 
     # 1) "ST,GS, 0.123 kg" / "US,NT, 123 g" vb.
     m = re.search(r'(?:ST|US|OL)?\s*,?\s*(?:GS|NT|TR)?\s*,?\s*([-+]?\d+(?:[.,]\d+)?)\s*(kg|g)\b', s, re.IGNORECASE)
@@ -462,7 +467,7 @@ def parse_weight_line(line):
         try:
             v = float(val)
             grams = int(round(v * 1000)) if unit == "kg" else int(round(v))
-            if abs(grams) < 5:
+            if abs(grams) < 5 or abs(grams) > MAX_REALISTIC_GRAMS:
                 return None
             return grams
         except Exception:
@@ -476,7 +481,7 @@ def parse_weight_line(line):
         try:
             v = float(val)
             grams = int(round(v * 1000)) if unit == "kg" else int(round(v))
-            if abs(grams) < 5:
+            if abs(grams) < 5 or abs(grams) > MAX_REALISTIC_GRAMS:
                 return None
             return grams
         except Exception:
@@ -492,7 +497,7 @@ def parse_weight_line(line):
                 frac += "0"
             frac = frac[:3]
             grams = whole * 1000 + int(frac)
-            if grams < 5:
+            if grams < 5 or grams > MAX_REALISTIC_GRAMS:
                 return None
             return grams
         except Exception:
@@ -503,7 +508,7 @@ def parse_weight_line(line):
     if m:
         kg = int(m.group(1)); gr = int(m.group(2))
         grams = kg * 1000 + gr
-        if grams < 5:
+        if grams < 5 or grams > MAX_REALISTIC_GRAMS:
             return None
         return grams
 
@@ -511,7 +516,7 @@ def parse_weight_line(line):
     m = re.search(r'(?<!\d)(-?\d+)\s*g\b', s, re.IGNORECASE)
     if m:
         grams = int(m.group(1))
-        if abs(grams) < 5:
+        if abs(grams) < 5 or abs(grams) > MAX_REALISTIC_GRAMS:
             return None
         return grams
 
@@ -541,9 +546,9 @@ def auto_serial_port_terazi() -> Optional[str]:
     """
     Terazi port seçimi:
     1) TERAZI_PORT ortam değişkeni varsa onu kullan.
-    2) Windows'ta listelenen portlar içinde COM1 varsa onu tercih et.
+    2) Windows'ta listelenen portlar içinde COM6 varsa onu tercih et.
     3) Token eşleşmelerine göre akıllı seçim yap.
-    4) Hiçbiri olmazsa fallback (Windows: COM1, Unix: /dev/ttyUSB0).
+    4) Hiçbiri olmazsa fallback (Windows: COM6, Unix: /dev/ttyUSB0).
     """
     env = os.getenv("TERAZI_PORT")
     if env:
@@ -554,8 +559,8 @@ def auto_serial_port_terazi() -> Optional[str]:
         ports = []
     if IS_WINDOWS and ports:
         for p in ports:
-            if str(p.device).upper() == "COM1":
-                return "COM1"
+            if str(p.device).upper() == "COM6":
+                return "COM6"
     if not ports:
         return SCL_PORT_FALLBACK
     tokens_primary = ["ftdi", "ad", "terazi", "scale", "weigh"]
@@ -625,7 +630,7 @@ class LabelApp(tk.Tk):
         # Terazi bağlantı ayarları (debug için UI'dan değiştirilebilir)
         self.serial_baud_var = tk.StringVar(value=str(SCL_BAUD))
         self.serial_parity_var = tk.StringVar(value="ODD")  # NONE/EVEN/ODD
-        self.xonxoff_var = tk.BooleanVar(value=False)       # PySerial yazılımsal akış kontrolü
+        self.xonxoff_var = tk.BooleanVar(value=False)       # Yazılımsal akış kontrolü
         self.poll_mode = tk.BooleanVar(value=True)          # True: POLL (komut gönder), False: LISTEN (ham dinle)
         self.show_raw = tk.BooleanVar(value=True)           # Ham veriyi göster
 
@@ -948,7 +953,7 @@ class LabelApp(tk.Tk):
                     if resp:
                         self._push_raw(resp)
                     buffer += resp
-                    # Ek olarak bir nebze doğrudan okuma (bazı teraziler ardışıl veri gönderir)
+                    # Ek doğrudan okuma
                     extra = self.ser_terazi.read(self.ser_terazi.in_waiting or 0)
                     if extra:
                         self._push_raw(extra)
@@ -969,7 +974,7 @@ class LabelApp(tk.Tk):
 
                     weight = parse_weight_line(line)
                     if weight is None:
-                        # Parse edilemediyse, sadece ham gösterim yeterli
+                        # Parse edilemediyse veya 15 kg üstü/yersiz ise: sadece ham gösterim
                         continue
 
                     # Ağırlık gösterimi
@@ -1087,7 +1092,6 @@ class LabelApp(tk.Tk):
             s = data.decode(errors="ignore")
         except Exception:
             s = repr(data)
-        # Satır satır bölüp kuyruğa at
         for part in re.split(r'[\r\n]+', s):
             if part:
                 try:
@@ -1120,34 +1124,29 @@ class LabelApp(tk.Tk):
 
     def _gui_pulse(self):
         # Log'ları boşalt
-        updated = False
         while True:
             try:
                 line = self.log_q.get_nowait()
             except queue.Empty:
                 break
             else:
-                updated = True
                 self.log_text.configure(state="normal")
                 self.log_text.insert("end", line + "\n")
                 self.log_text.see("end")
                 self.log_text.configure(state="disabled")
 
         # Ham veriyi boşalt
-        raw_updated = False
         while True:
             try:
                 raw = self.raw_q.get_nowait()
             except queue.Empty:
                 break
             else:
-                raw_updated = True
                 self.raw_text.configure(state="normal")
                 self.raw_text.insert("end", raw + "\n")
                 self.raw_text.see("end")
                 self.raw_text.configure(state="disabled")
 
-        # Periyodik tekrar
         self.after(100, self._gui_pulse)
 
     def _on_close(self):
