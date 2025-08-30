@@ -41,7 +41,7 @@ ODOO_URL_TEMPLATE = "https://altinayet-stage-22335048.dev.odoo.com/terazi/get/{m
 
 STABLE_COUNT = 5
 SENSITIVITY_GRAM = 20
-MAX_REALISTIC_GRAMS = 15000  # 15 kg üstünü yok say
+MAX_REALISTIC_GRAMS = 25000  # 15 kg üstünü yok say
 
 # =========================
 # Yazıcı (ESC 'V' raster) Ayarları
