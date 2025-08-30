@@ -58,7 +58,7 @@ DEVICE_WIDTH_BYTES = 108
 DEVICE_WIDTH_DOTS  = DEVICE_WIDTH_BYTES * 8  # 864
 
 DATA_CHUNK_SIZE = 4096
-FEED_AFTER_LINES = 0  # 0..2 önerilir; 1 satır boşluk sorununu önlemek için 0 yapıldı
+FEED_AFTER_LINES = 0  # 1 satır boşluk atmasın diye 0
 
 # Tuval ve işleme
 REQ_W = 748
@@ -68,9 +68,9 @@ ROTATE_180 = True
 THRESHOLD = 192
 INVERT_BW = False
 
-# Dikey ofset (yazıyı 1 cm yukarı almak için)
+# Dikey ofset (etiketi fiziksel baskıda 1 cm yukarı almak için)
 # 203dpi (8 dot/mm) varsayımıyla 1 cm = 10 mm -> 80 dot
-DPMM = 8  # 203 dpi yazıcılar için 1 mm'de ~8 dot
+DPMM = 8  # 203 dpi yazıcılar için ~8 dot/mm
 SHIFT_UP_MM = 10
 SHIFT_UP_DOTS = int(round(SHIFT_UP_MM * DPMM))
 
@@ -108,7 +108,7 @@ SCL_BAUD = 19200
 SCL_PARITY = serial.PARITY_ODD
 SCL_TIMEOUT = 0.5
 
-# Windows'ta COM2'yi varsayılan tercih et (fallback)
+# Windows'ta COM1'i varsayılan tercih et (fallback)
 SCL_PORT_FALLBACK = "COM1" if IS_WINDOWS else "/dev/ttyUSB0"
 
 # =========================
@@ -276,8 +276,7 @@ def compose_label(data: Dict[str, Any], width_dots: int, height_dots: int, forbi
 
 def shift_image_vertical(img: Image.Image, dy: int, fill=(255, 255, 255)) -> Image.Image:
     """
-    Görüntüyü dikey eksende kaydırır. dy < 0 ise yukarı, dy > 0 ise aşağı kaydırır.
-    Taşan alanlar 'fill' rengiyle doldurulur.
+    Görüntüyü dikey eksende kaydırır. dy < 0: yukarı, dy > 0: aşağı (piksel koordinatlarına göre).
     """
     w, h = img.size
     out = Image.new(img.mode, (w, h), fill)
@@ -370,9 +369,11 @@ def send_single_esc_v_height_only(ser: serial.Serial, raw_padded: bytes, rows: i
 def send_label_image_to_printer(ser_yazici: Optional[serial.Serial], payload: Dict[str, Any], feed_after_lines: int, preview_only: bool, on_preview_image=None):
     img = compose_label(payload, WIDTH_DOTS, HEIGHT_DOTS, BOTTOM_FORBID)
 
-    # Yazıyı 1 cm yukarı kaydır (ROTATE_180 sonrası koordinat sisteminde yukarı = negatif dy)
+    # DİKKAT: Tersten baskıda (ROTATE_180=True) fiziksel olarak "yukarı" istendi.
+    # Kullanıcı geri bildirimi: negatif dy aşağı, pozitif dy yukarı etkisi vermiş.
+    # Bu nedenle burada pozitif dy kullanıyoruz.
     if SHIFT_UP_DOTS != 0:
-        img = shift_image_vertical(img, dy=-SHIFT_UP_DOTS, fill=(255, 255, 255))
+        img = shift_image_vertical(img, dy=+SHIFT_UP_DOTS, fill=(255, 255, 255))
 
     if img.size != (WIDTH_DOTS, HEIGHT_DOTS):
         img = img.resize((WIDTH_DOTS, HEIGHT_DOTS), Image.LANCZOS)
@@ -396,7 +397,7 @@ def send_label_image_to_printer(ser_yazici: Optional[serial.Serial], payload: Di
     clear_printer_buffer(ser_yazici)
     send_single_esc_v_height_only(ser_yazici, raw_padded, rows=rows)
 
-    # Ek satır besleme KAPALI (1 satır boşluk atmasın diye)
+    # Ek satır besleme KAPALI (başta boşluk olmasın diye)
     if feed_after_lines > 0:
         ser_yazici.write(b"\n" * feed_after_lines)
         ser_yazici.flush()
@@ -453,6 +454,7 @@ def send_terazi_handshake_ad2k_commands(ser):
 def parse_weight_line(line):
     if isinstance(line, bytes):
         line = line.decode(errors="ignore")
+    # Orijinal kalıp (0000K,GGG)
     match = re.search(r'\b0000(\d),(\d{3})', line)
     if match:
         kg = int(match.group(1))
@@ -461,6 +463,19 @@ def parse_weight_line(line):
         if total_gram < 5:
             return None
         return total_gram
+    # Yedek kalıplar (isteğe bağlı genişletilebilir)
+    m2 = re.search(r'([-+]?\d+(?:[.,]\d+)?)\s*(kg|g)\b', line, re.IGNORECASE)
+    if m2:
+        val = m2.group(1).replace(",", ".")
+        unit = m2.group(2).lower()
+        try:
+            v = float(val)
+            grams = int(round(v * 1000)) if unit == "kg" else int(round(v))
+            if abs(grams) < 5:
+                return None
+            return grams
+        except Exception:
+            pass
     return None
 
 def stable_value(stable_queue: deque, tolerance: int) -> bool:
@@ -487,9 +502,9 @@ def auto_serial_port_terazi() -> Optional[str]:
     """
     Terazi port seçimi:
     1) TERAZI_PORT ortam değişkeni varsa onu kullan.
-    2) Windows'ta listelenen portlar içinde COM2 varsa onu tercih et.
+    2) Windows'ta listelenen portlar içinde COM1 varsa onu tercih et.
     3) Token eşleşmelerine göre akıllı seçim yap.
-    4) Hiçbiri olmazsa fallback döndür (Windows: COM2, Unix: /dev/ttyUSB0).
+    4) Hiçbiri olmazsa fallback döndür (Windows: COM1, Unix: /dev/ttyUSB0).
     """
     env = os.getenv("TERAZI_PORT")
     if env:
@@ -500,7 +515,7 @@ def auto_serial_port_terazi() -> Optional[str]:
     except Exception:
         ports = []
 
-    # Windows'ta COM2'yi özellikle tercih et
+    # Windows'ta COM1'i özellikle tercih et
     if IS_WINDOWS and ports:
         for p in ports:
             if str(p.device).upper() == "COM1":
