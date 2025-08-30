@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-# Terazi Etiket Yazıcı – Tek Dosya (başlık biraz yukarı + font 1 tık büyük)
+# Terazi Etiket Yazıcı – Başlık yukarı + font büyütme + bold kuralları (orijinaline uygun)
 # - Sans Serif font (normal + bold) zorunlu (sistem TTF taraması).
-# - Ürün adı barkodun hemen üstünde sola yaslı; başlık için ekstra yukarı taşıma ayarı eklendi.
-# - “ALERJEN UYARISI …” satırı kalın (bold).
-# - Fiziksel konum kalibrasyonu: aşağı/sola canlı ayar (tüm sayfa kaydırır).
-# - İçerik başlangıç noktası (iç ofset): içerik bloğunu mm cinsinden aşağı/sağa kaydırma (sadece içerik).
-# - Debug çerçevesi ve başlangıç-noktası işareti ile görsel kontrol.
-# - COM6 terazi fallback, ham veri görünümü, POLL/LISTEN okuma modları.
-# - 25 kg üzeri veya "400000.00 g" gibi hatalı ölçüleri yok sayar (MAX_REALISTIC_GRAMS=25000).
-# - Odoo START/DONE ve print_series akışları.
+# - Ürün adı barkodun hemen üstünde, bold ve 1 tık büyük; GAP mm ile yukarı konumlanır.
+# - Sol kolon: "Adet:, Ağırlık:, S.T.T.:" normal; "Ağırlık" değeri ve "S.T.T." değeri bold; "Adet" değeri normal.
+# - Alt metin: "ALERJEN UYARISI …" komple bold; "Saklama koşulları:", "Parti-seri no:" gibi önekler bold, devamı normal.
+# - Fiziksel konum kalibrasyonu ve içerik-ofset/önizleme/seri yazdırma akışları korunur.
 
 import os
 import re
@@ -31,9 +27,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 # =========================
-# Odoo Uçları ve Kararlılık
+# Odoo uçları ve kararlılık
 # =========================
-GET_JOB_URL = "https://altinayet-stage-22335048.dev.odoo.com/terazi/get_scale_job/1"   # scale_id'yi gerektiği gibi güncelleyin
+GET_JOB_URL = "https://altinayet-stage-22335048.dev.odoo.com/terazi/get_scale_job/1"
 ODOO_URL_TEMPLATE = "https://altinayet-stage-22335048.dev.odoo.com/terazi/get/{mrp_id}/{weight}"
 
 STABLE_COUNT = 5
@@ -41,7 +37,7 @@ SENSITIVITY_GRAM = 20
 MAX_REALISTIC_GRAMS = 25000  # 25 kg üstünü yok say
 
 # =========================
-# Yazıcı (ESC 'V' raster) Ayarları
+# Yazıcı Ayarları
 # =========================
 IS_WINDOWS = os.name == "nt"
 
@@ -54,19 +50,18 @@ PRN_BAUD = 19200
 PRN_PARITY = serial.PARITY_NONE
 PRN_TIMEOUT = 0.5
 
-# Cihaz genişliği (bayt/satır)
 DEVICE_WIDTH_BYTES = 108
-DEVICE_WIDTH_DOTS  = DEVICE_WIDTH_BYTES * 8  # 864 dot
+DEVICE_WIDTH_DOTS  = DEVICE_WIDTH_BYTES * 8  # 864
 
 DATA_CHUNK_SIZE = 4096
-FEED_AFTER_LINES = 0  # Başta boş satır istemediğimiz için 0
+FEED_AFTER_LINES = 0
 
 # =========================
-# Tuval ve raster işleme
+# Tuval ve raster
 # =========================
 REQ_W = 748
 REQ_H = 748
-BOTTOM_FORBID = 160   # alt sarı bantla çakışmayı önlemek için
+BOTTOM_FORBID = 160
 ROTATE_180 = True
 THRESHOLD = 192
 INVERT_BW = False
@@ -80,6 +75,8 @@ LABEL_WIDTH_BYTES = WIDTH_DOTS // 8  # 94
 
 # 203 dpi ~ 8 dot/mm
 DPMM = 8
+def mm_to_dots(mm: float) -> int:
+    return int(round(mm * DPMM))
 
 def _env_float(name: str, default_val: float) -> float:
     try:
@@ -88,13 +85,9 @@ def _env_float(name: str, default_val: float) -> float:
     except Exception:
         return default_val
 
-# Varsayılan fiziksel kalibrasyon (GUI’den canlı değiştirilecek)
-# Not: Bu değerler tüm sayfayı kaydırır. Kullanıcı "-13.0" ile iyi sonuç aldığını söyledi.
-PHYS_SHIFT_DOWN_MM = -13.0  # mm, fiziksel aşağı (+) – ROTATE_180 mantığı içinde işlenir
-H_SHIFT_MM = -5.0           # mm, merkezden sola (+) – pad aşamasında uygulanır
-
-def mm_to_dots(mm: float) -> int:
-    return int(round(mm * DPMM))
+# Tüm sayfa kalibrasyonu (kullanıcı -13.0 ile iyi sonuç aldı, korunur)
+PHYS_SHIFT_DOWN_MM = -13.0  # mm (ROTATE_180 dikkate alınarak uygulanır)
+H_SHIFT_MM = -5.0           # mm (merkezden sola pozitif; negatif ise etkisiz kalır)
 
 # İç yerleşim (px)
 LEFT_MARGIN = 8
@@ -104,13 +97,12 @@ LEFT_COL_WIDTH = 270
 COL_GAP = 16
 RIGHT_BARCODE_HEIGHT = 108
 
-# Başlık (ürün adı) için ekstra boşluk (barkod üstünden başlığın ne kadar yukarıda olacağı)
-# Daha büyük değer = başlık daha yukarı (barkoda göre mesafe artar)
-PRODUCT_TITLE_GAP_MM = float(os.getenv("PRODUCT_TITLE_GAP_MM", "2.0"))  # varsayılan 2.0 mm
+# Başlık (ürün adı) aralığı: barkodun üstünde ne kadar yukarı (mm)
+PRODUCT_TITLE_GAP_MM = float(os.getenv("PRODUCT_TITLE_GAP_MM", "2.0"))
 PRODUCT_TITLE_GAP_PX = mm_to_dots(PRODUCT_TITLE_GAP_MM)
 
 # =========================
-# Sans Serif font çözümleme (normal + bold)
+# Sans Serif font çözümleme
 # =========================
 def _scan_font_dirs() -> list[str]:
     dirs = []
@@ -145,18 +137,18 @@ def _find_font_by_names(names: list[str]) -> Optional[str]:
 
 def resolve_sans_serif_paths() -> tuple[Optional[str], Optional[str]]:
     normal_candidates = [
-        "segoeui.ttf", "arial.ttf",                 # Windows
-        "DejaVuSans.ttf", "LiberationSans-Regular.ttf", "FreeSans.ttf",  # Linux
-        "Arial.ttf", "Helvetica.ttc", "HelveticaNeue.ttc",               # macOS
+        "segoeui.ttf", "arial.ttf",
+        "DejaVuSans.ttf", "LiberationSans-Regular.ttf", "FreeSans.ttf",
+        "Arial.ttf", "Helvetica.ttc", "HelveticaNeue.ttc",
     ]
     bold_candidates = [
-        "segoeuib.ttf", "arialbd.ttf",              # Windows
-        "DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "FreeSansBold.ttf",  # Linux
-        "Arial Bold.ttf", "Helvetica-Bold.ttf", "HelveticaNeue-Bold.ttf",      # macOS
+        "segoeuib.ttf", "arialbd.ttf",
+        "DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "FreeSansBold.ttf",
+        "Arial Bold.ttf", "Helvetica-Bold.ttf", "HelveticaNeue-Bold.ttf",
     ]
     return _find_font_by_names(normal_candidates), _find_font_by_names(bold_candidates)
 
-FORCE_SANS_SERIF = os.getenv("FORCE_SANS_SERIF", "1") in ("1", "true", "True")  # varsayılan zorla
+FORCE_SANS_SERIF = os.getenv("FORCE_SANS_SERIF", "1") in ("1", "true", "True")
 SANS_NORMAL_PATH, SANS_BOLD_PATH = resolve_sans_serif_paths()
 
 def load_font_exact(path: Optional[str], size: int) -> ImageFont.ImageFont:
@@ -167,8 +159,10 @@ def load_font_exact(path: Optional[str], size: int) -> ImageFont.ImageFont:
             pass
     return ImageFont.load_default()
 
-def get_fonts_for_sizes(size_title=34, size_sub=26, size_label=22, size_text=18, size_bar=18, payload_font_path: Optional[str] = None):
-    # size_title 32→34 px (isteğe göre 1 tık büyütüldü). 34 px ≈ 12.1 pt @203 dpi
+def get_fonts_for_sizes(
+    size_title=34, size_sub=26, size_label=22, size_text=18, size_bar=18,
+    payload_font_path: Optional[str] = None
+):
     normal_base = None
     bold_base = None
     if not FORCE_SANS_SERIF and payload_font_path and os.path.exists(payload_font_path):
@@ -185,25 +179,26 @@ def get_fonts_for_sizes(size_title=34, size_sub=26, size_label=22, size_text=18,
     if not bold_base:
         bold_base = SANS_BOLD_PATH
 
-    f_title = load_font_exact(normal_base, size_title)
-    f_sub   = load_font_exact(normal_base, size_sub)
-    f_label = load_font_exact(normal_base, size_label)
-    f_text  = load_font_exact(normal_base, size_text)
-    f_text_b= load_font_exact(bold_base,   size_text)
-    f_bar   = load_font_exact(normal_base, size_bar)
-    return {
-        "title": f_title, "sub": f_sub, "label": f_label, "text": f_text, "text_b": f_text_b, "bar": f_bar,
+    fonts = {
+        "title": load_font_exact(normal_base, size_title),
+        "title_b": load_font_exact(bold_base, size_title),
+        "sub":   load_font_exact(normal_base, size_sub),
+        "sub_b": load_font_exact(bold_base,   size_sub),
+        "label": load_font_exact(normal_base, size_label),
+        "label_b": load_font_exact(bold_base, size_label),
+        "text":  load_font_exact(normal_base, size_text),
+        "text_b":load_font_exact(bold_base,   size_text),
+        "bar":   load_font_exact(normal_base, size_bar),
         "_paths": {"normal": normal_base, "bold": bold_base}
     }
+    return fonts
 
 # =========================
-# Terazi (AD2K) Ayarları
+# Terazi (AD2K)
 # =========================
 SCL_BAUD = 19200
 SCL_PARITY = serial.PARITY_ODD
 SCL_TIMEOUT = 0.5
-
-# Windows'ta COM6'yı varsayılan tercih et (TERAZI_PORT ile override edilebilir)
 SCL_PORT_FALLBACK = "COM6" if IS_WINDOWS else "/dev/ttyUSB0"
 
 # =========================
@@ -260,7 +255,7 @@ def draw_ean13(canvas: Image.Image, x: int, y: int, width: int, height: int, dat
     draw.text((x0 + (bw - tw)//2, y + bar_h + 2), num_text, font=font, fill=(0,0,0))
 
 # =========================
-# Metin sarmalama
+# Metin yardımcıları
 # =========================
 def text_wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> str:
     if not text:
@@ -284,6 +279,76 @@ def text_wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, m
             lines.append(buf)
     return "\n".join(lines)
 
+def _startswith_ci(s: str, pref: str) -> bool:
+    return s.casefold().startswith(pref.casefold())
+
+def draw_line_with_bold_prefix(draw: ImageDraw.ImageDraw, x: int, y: int, max_w: int, line: str,
+                               font_regular: ImageFont.ImageFont, font_bold: ImageFont.ImageFont,
+                               spacing: int = 6, bold_prefixes: List[str] = []) -> Tuple[int, int]:
+    """
+    Bir satırda belirli önekleri bold, kalanını normal çizer.
+    Satır uzunsa, ilk satırda önekin ardından kalan bölümü çizip,
+    kalan kısmı bir alt satıra (tam genişlikte, regular) sarar.
+    Döndürdüğü değer: (kullanılan toplam yükseklik, kalan karakter sayısı 0)
+    """
+    line = line or ""
+    # En çok bilinen önekleri sırayla dene (örn: "Saklama koşulları:", "Parti-seri no:")
+    matched = None
+    for p in bold_prefixes:
+        if _startswith_ci(line.strip(), p.strip()):
+            matched = p
+            break
+    if not matched:
+        # Tamamı regular (daha sonra ALLERJEN case için üstte çağırmıyoruz)
+        draw.text((x, y), line, font=font_regular, fill=(0,0,0))
+        return font_regular.size + spacing, 0
+
+    # Önek + kalan
+    pref_len = len(matched)
+    # Öneki orijinal harfleriyle alalım (strip etkisini kaldırmayalım)
+    # Öncesinde boşluk varsa korumak için lstrip/lfind yapmayalım – basit yaklaşım:
+    s = line.strip()
+    prefix = s[:pref_len]
+    rest = s[pref_len:].lstrip()
+
+    pref_w = int(draw.textlength(prefix, font=font_bold))
+    line_h = font_regular.size + spacing
+
+    # Önce prefix
+    draw.text((x, y), prefix, font=font_bold, fill=(0,0,0))
+
+    # Sonra aynı satırda kalan için müsait alan
+    remain_w = max(0, max_w - pref_w - 4)
+    if remain_w <= 0 or not rest:
+        return line_h, 0
+
+    # İlk satırın geri kalanını mümkün olduğunca sığdır
+    words = rest.split(" ")
+    buf = ""
+    idx = 0
+    for i, w in enumerate(words):
+        cand = w if not buf else f"{buf} {w}"
+        if draw.textlength(cand, font=font_regular) <= remain_w:
+            buf = cand
+            idx = i + 1
+        else:
+            break
+    # Aynı satırda kalan parça
+    draw.text((x + pref_w + 4, y), buf, font=font_regular, fill=(0,0,0))
+
+    # Devamı varsa alt satırlara sar
+    rest_tail = " ".join(words[idx:])
+    used_h = line_h
+    yy = y + line_h
+    if rest_tail:
+        wrapped = text_wrap(draw, rest_tail, font=font_regular, max_width=max_w)
+        for ln in wrapped.splitlines():
+            draw.text((x, yy), ln, font=font_regular, fill=(0,0,0))
+            yy += font_regular.size + spacing
+            used_h += font_regular.size + spacing
+
+    return used_h, 0
+
 # =========================
 # Görsel bileşimi
 # =========================
@@ -296,17 +361,27 @@ def compose_label(
     inner_dy_dots: int = 0,
     debug_frame: bool = False
 ) -> Image.Image:
-    payload_font_path = data.get("font_path")
     fonts = get_fonts_for_sizes(
-        size_title=34, size_sub=26, size_label=22, size_text=18, size_bar=18,
-        payload_font_path=payload_font_path
+        size_title=34,  # başlık 1 tık büyütüldü
+        size_sub=26,
+        size_label=22,
+        size_text=18,
+        size_bar=18,
+        payload_font_path=data.get("font_path")
     )
-    f_title = fonts["title"]; f_sub = fonts["sub"]; f_label = fonts["label"]; f_text = fonts["text"]; f_text_b = fonts["text_b"]; f_bar = fonts["bar"]
+    f_title  = fonts["title"]
+    f_title_b= fonts["title_b"]
+    f_sub    = fonts["sub"]
+    f_sub_b  = fonts["sub_b"]     # ağırlık değeri için
+    f_label  = fonts["label"]
+    f_text   = fonts["text"]
+    f_text_b = fonts["text_b"]
+    f_bar    = fonts["bar"]
 
     canvas = Image.new("RGB", (width_dots, height_dots), (255, 255, 255))
     draw = ImageDraw.Draw(canvas)
 
-    # Debug: dış çerçeve ve içerik başlangıç işareti
+    # Debug çerçeve ve içerik başlangıcı artı işareti
     if debug_frame:
         draw.rectangle([1, 1, width_dots-2, height_dots-2], outline=(0,0,0), width=2)
         x0_mark = LEFT_MARGIN + inner_dx_dots
@@ -320,39 +395,39 @@ def compose_label(
     label_w = 120
     val_x = left_x + label_w + 8
 
+    # Etiket başlıkları normal
     draw.text((left_x, y0), "Adet:",  font=f_label, fill=(0,0,0))
-    draw.text((val_x,  y0), str(data.get("count", "")), font=f_label, fill=(0,0,0))
+    draw.text((val_x,  y0), str(data.get("count", "")), font=f_label, fill=(0,0,0))  # adet değeri normal
 
     y1 = y0 + LEFT_BLOCK_GAP
     draw.text((left_x, y1), "Ağırlık:", font=f_label, fill=(0,0,0))
-    draw.text((val_x,  y1), str(data.get("weight_str", "")), font=f_sub,   fill=(0,0,0))
+    draw.text((val_x,  y1), str(data.get("weight_str", "")), font=f_sub_b, fill=(0,0,0))  # ağırlık DEĞERİ bold
 
     y2 = y1 + LEFT_BLOCK_GAP
     draw.text((left_x, y2), "S.T.T.:", font=f_label, fill=(0,0,0))
-    draw.text((val_x,  y2), str(data.get("expiry", "")), font=f_label, fill=(0,0,0))
+    draw.text((val_x,  y2), str(data.get("expiry", "")), font=f_sub_b, fill=(0,0,0))     # S.T.T. DEĞERİ bold
 
     # Sağ sütun: Ürün adı + barkod
     right_x = LEFT_MARGIN + LEFT_COL_WIDTH + COL_GAP + inner_dx_dots
     right_w = max(200, width_dots - right_x - LEFT_MARGIN - max(0, -inner_dx_dots))
-    bar_x = right_x
     bar_top = y0
     bar_h = RIGHT_BARCODE_HEIGHT
 
-    # Ürün adı – barkodun üstünde; 34→22 px arası küçült; GAP büyütülerek başlık biraz daha yukarı alındı
+    # Ürün adı bold ve biraz daha yukarı
     product = str(data.get("product_name", "") or "").strip()
     if product:
-        size = f_title.size
-        normal_path = fonts["_paths"]["normal"]
+        size = f_title_b.size
+        normal_path = fonts["_paths"]["bold"]  # başlık için bold tabanı
         while size >= 22 and draw.textlength(product, font=load_font_exact(normal_path, size)) > right_w:
             size -= 1
         f_prod = load_font_exact(normal_path, size)
-        prod_y = max(4, bar_top - f_prod.size - PRODUCT_TITLE_GAP_PX)  # önceki -4 px yerine ~2.0 mm (varsayılan) boşluk
+        prod_y = max(4, bar_top - f_prod.size - PRODUCT_TITLE_GAP_PX)
         draw.text((right_x, prod_y), product, font=f_prod, fill=(0,0,0))
 
     # Barkod
-    draw_ean13(canvas, bar_x, bar_top, right_w, bar_h, str(data.get("barcode", "")), f_bar)
+    draw_ean13(canvas, right_x, bar_top, right_w, bar_h, str(data.get("barcode", "")), f_bar)
 
-    # İç metin bloğu (altta) – Alerjen satırı bold
+    # İç metin bloğu – alerjen komple bold; belirli önekler sadece bold
     last_left_y = y2 + f_label.size
     last_barcode_y = bar_top + bar_h + max(12, int(RIGHT_BARCODE_HEIGHT * 0.18)) + 4
     text_top = max(last_left_y, last_barcode_y) + 16
@@ -361,28 +436,48 @@ def compose_label(
     block_h = max(0, safe_h - text_top - 8)
     block_w = width_dots - 2*LEFT_MARGIN
 
-    paragraph_texts: List[str] = []
+    # ingredients + notes
+    blobs = []
     for key in ("ingredients", "notes"):
         t = str(data.get(key, "") or "").strip()
         if t:
-            paragraph_texts.append(t)
-    full_text = "\n\n".join(paragraph_texts)
+            blobs.append(t)
+    full_text = "\n\n".join(blobs)
 
     if block_h > 0 and full_text:
         y = text_top
+        # Bold önek listesi
+        bold_prefixes = [
+            "Saklama koşulları:",
+            "Parti-seri no:",
+            "ÜRETİCİ FİRMA",   # bazı etiketlerde bu başlık geçiyor
+        ]
         for para in full_text.split("\n"):
-            is_allergen = para.strip().upper().startswith("ALERJEN")
-            f_wrap = f_text_b if is_allergen else f_text
-            wrapped = text_wrap(draw, para, f_wrap, block_w)
-            for ln in wrapped.splitlines():
-                line_h = f_wrap.size + 6
-                if y + line_h > text_top + block_h:
-                    if draw.textlength("...", font=f_wrap) <= block_w:
-                        draw.text((LEFT_MARGIN, y), "...", font=f_wrap, fill=(0,0,0))
-                    y = text_top + block_h
-                    break
-                draw.text((LEFT_MARGIN, y), ln, font=f_wrap, fill=(0,0,0))
-                y += line_h
+            p = para.strip()
+            if not p:
+                y += f_text.size + 6
+                if y >= text_top + block_h: break
+                continue
+
+            # ALERJEN UYARISI tam satır bold
+            if _startswith_ci(p, "ALERJEN"):
+                wrapped = text_wrap(draw, p, f_text_b, block_w)
+                for ln in wrapped.splitlines():
+                    line_h = f_text_b.size + 6
+                    if y + line_h > text_top + block_h:
+                        break
+                    draw.text((LEFT_MARGIN, y), ln, font=f_text_b, fill=(0,0,0))
+                    y += line_h
+                if y >= text_top + block_h: break
+                continue
+
+            # Önek bold, devam regular
+            used_h, _ = draw_line_with_bold_prefix(
+                draw, LEFT_MARGIN, y, block_w, p,
+                font_regular=f_text, font_bold=f_text_b, spacing=6,
+                bold_prefixes=bold_prefixes
+            )
+            y += used_h
             if y >= text_top + block_h:
                 break
 
@@ -391,7 +486,7 @@ def compose_label(
     return canvas
 
 # =========================
-# Görsel kaydırma ve raster dönüşüm
+# Görsel/raster yardımcıları
 # =========================
 def shift_image_vertical(img: Image.Image, dy: int, fill=(255, 255, 255)) -> Image.Image:
     w, h = img.size
@@ -432,7 +527,6 @@ def pad_rows_to_device_width(raw: bytes, label_wb: int, device_wb: int, rows: in
         pad_left = pad_total
     else:
         pad_left = pad_total // 2
-    # Merkezden sola doğru ilave kaydırma
     if left_shift_dots > 0:
         pad_left = max(0, min(pad_total, pad_left - left_shift_dots))
     for r in range(rows):
@@ -474,7 +568,6 @@ def send_single_esc_v_height_only(ser: serial.Serial, raw_padded: bytes, rows: i
     ser.write(header)
     ser.flush()
     time.sleep(0.01)
-
     total = len(raw_padded)
     sent = 0
     while sent < total:
@@ -505,23 +598,19 @@ def send_label_image_to_printer(
         debug_frame=debug_frame
     )
 
-    # Fiziksel aşağı/sola kaydırma
     if PHYS_SHIFT_DOWN_MM != 0:
         dy = (-mm_to_dots(PHYS_SHIFT_DOWN_MM)) if ROTATE_180 else (mm_to_dots(PHYS_SHIFT_DOWN_MM))
         img = shift_image_vertical(img, dy=dy, fill=(255, 255, 255))
 
-    # Raster’a çevir
     if img.size != (WIDTH_DOTS, HEIGHT_DOTS):
         img = img.resize((WIDTH_DOTS, HEIGHT_DOTS), Image.LANCZOS)
     raw_label, label_wb, rows = to_1bit_bytes(img, WIDTH_DOTS)
 
-    # Yatay sola kaydırma (merkezden)
     raw_padded = pad_rows_to_device_width(
         raw_label, label_wb=label_wb, device_wb=DEVICE_WIDTH_BYTES, rows=rows,
         align="center", left_shift_dots=mm_to_dots(H_SHIFT_MM)
     )
 
-    # Önizleme artefaktları
     try:
         img.save(PREVIEW_PNG_PATH)
         img.convert("1").save(PREVIEW_BMP1_PATH, format="BMP")
@@ -534,10 +623,8 @@ def send_label_image_to_printer(
 
     if preview_only or ser_yazici is None:
         return
-
     clear_printer_buffer(ser_yazici)
     send_single_esc_v_height_only(ser_yazici, raw_padded, rows=rows)
-
     if feed_after_lines > 0:
         ser_yazici.write(b"\n" * feed_after_lines)
         ser_yazici.flush()
@@ -583,11 +670,9 @@ def parse_weight_line(line):
         line = line.decode(errors="ignore")
     s = (line or "").strip()
 
-    # Bilinen hatalı değer
     if re.search(r'\b400000(?:[.,]00)?\s*g\b', s, re.IGNORECASE):
         return None
 
-    # 1) "ST,GS, 0.123 kg" vb.
     m = re.search(r'(?:ST|US|OL)?\s*,?\s*(?:GS|NT|TR)?\s*,?\s*([-+]?\d+(?:[.,]\d+)?)\s*(kg|g)\b', s, re.IGNORECASE)
     if m:
         val = m.group(1).replace(",", ".")
@@ -601,7 +686,6 @@ def parse_weight_line(line):
         except Exception:
             pass
 
-    # 2) “0,123 kg” / “2.500 kg” / “123 g”
     m = re.search(r'([-+]?\d+(?:[.,]\d+)?)\s*(kg|g)\b', s, re.IGNORECASE)
     if m:
         val = m.group(1).replace(",", ".")
@@ -615,7 +699,6 @@ def parse_weight_line(line):
         except Exception:
             pass
 
-    # 3) “12,345” -> 12kg 345g
     m = re.search(r'(?<!\d)(\d+),(\d{1,3})(?!\d)', s)
     if m:
         try:
@@ -631,7 +714,6 @@ def parse_weight_line(line):
         except Exception:
             pass
 
-    # 4) Eski kalıp
     m = re.search(r'\b0000(\d),(\d{3})', s)
     if m:
         kg = int(m.group(1)); gr = int(m.group(2))
@@ -640,7 +722,6 @@ def parse_weight_line(line):
             return None
         return grams
 
-    # 5) yalın “123 g”
     m = re.search(r'(?<!\d)(-?\d+)\s*g\b', s, re.IGNORECASE)
     if m:
         grams = int(m.group(1))
@@ -656,7 +737,7 @@ def stable_value(stable_queue: deque, tolerance: int) -> bool:
     return (max(stable_queue) - min(stable_queue)) <= tolerance
 
 # =========================
-# Port Keşfi
+# Port keşfi
 # =========================
 def _port_matches(tokens: List[str], info) -> bool:
     low_fields = " ".join([
@@ -710,7 +791,7 @@ def auto_serial_port_yazici() -> str:
     return PRN_PORT_FALLBACK
 
 # =========================
-# GUI Uygulaması
+# GUI
 # =========================
 class LabelApp(tk.Tk):
     def __init__(self):
@@ -752,9 +833,9 @@ class LabelApp(tk.Tk):
         self.poll_mode = tk.BooleanVar(value=True)
         self.show_raw = tk.BooleanVar(value=True)
 
-        self.vert_mm_var = tk.DoubleVar(value=PHYS_SHIFT_DOWN_MM)  # aşağı (+)
-        self.horz_mm_var = tk.DoubleVar(value=H_SHIFT_MM)          # sola (+)
-
+        # Fiziksel (tüm sayfa) ve içerik ofsetleri
+        self.vert_mm_var = tk.DoubleVar(value=PHYS_SHIFT_DOWN_MM)
+        self.horz_mm_var = tk.DoubleVar(value=H_SHIFT_MM)
         self.inner_down_mm_var = tk.DoubleVar(value=0.0)
         self.inner_right_mm_var = tk.DoubleVar(value=0.0)
         self.debug_frame_var = tk.BooleanVar(value=False)
@@ -772,13 +853,11 @@ class LabelApp(tk.Tk):
 
         self._log(f"Sans Serif -> normal: {SANS_NORMAL_PATH or '(yok)'} | bold: {SANS_BOLD_PATH or '(yok)'} | FORCE_SANS_SERIF={FORCE_SANS_SERIF}")
         self._log(f"Fiziksel ofset başlangıç: aşağı={self.vert_mm_var.get()} mm, sola={self.horz_mm_var.get()} mm")
-        self._log("İpucu: Debug Çerçeve'yi açıp başlangıç noktasını (artı işareti) etiket üzerinde kontrol edin.")
         self._log(f"Başlık GAP: {PRODUCT_TITLE_GAP_MM:.2f} mm (env PRODUCT_TITLE_GAP_MM ile değiştirilebilir)")
 
         self.after(100, self._gui_pulse)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ---------- UI ----------
     def _build_ui(self):
         pad = 8
 
@@ -808,18 +887,16 @@ class LabelApp(tk.Tk):
         ttk.Radiobutton(settings, text="LISTEN (Ham Dinle)", variable=self.poll_mode, value=False).grid(row=0, column=8, sticky="w", padx=(4,0))
         ttk.Checkbutton(settings, text="Ham Veriyi Göster", variable=self.show_raw).grid(row=0, column=9, padx=(16,0))
 
-        cal = ttk.LabelFrame(self, text="Fiziksel Konum Kalibrasyonu (Tüm Sayfa) – mm")
+        # Fiziksel konum (tüm sayfa) – mm
+        cal = ttk.LabelFrame(self, text="Fiziksel Konum (Tüm Sayfa) – mm")
         cal.pack(fill="x", padx=pad, pady=(0, pad))
         ttk.Label(cal, text="Aşağı (+):").grid(row=0, column=0, sticky="e")
         ttk.Spinbox(cal, from_=-30, to=30, increment=0.5, textvariable=self.vert_mm_var, width=6).grid(row=0, column=1, padx=(4,16))
         ttk.Label(cal, text="Sola (+):").grid(row=0, column=2, sticky="e")
         ttk.Spinbox(cal, from_=-30, to=30, increment=0.5, textvariable=self.horz_mm_var, width=6).grid(row=0, column=3, padx=(4,16))
         ttk.Button(cal, text="Uygula", command=self._apply_physical_shifts).grid(row=0, column=4, padx=(4,12))
-        ttk.Button(cal, text="Aşağı +0.5", command=lambda: self._nudge_phys(0.5, 0)).grid(row=0, column=5, padx=2)
-        ttk.Button(cal, text="Yukarı -0.5", command=lambda: self._nudge_phys(-0.5, 0)).grid(row=0, column=6, padx=2)
-        ttk.Button(cal, text="Sola +0.5", command=lambda: self._nudge_phys(0, 0.5)).grid(row=0, column=7, padx=2)
-        ttk.Button(cal, text="Sağa -0.5", command=lambda: self._nudge_phys(0, -0.5)).grid(row=0, column=8, padx=2)
 
+        # İçerik başlangıç noktası – mm
         inner = ttk.LabelFrame(self, text="İçerik Başlangıç Noktası (Sadece İçerik) – mm")
         inner.pack(fill="x", padx=pad, pady=(0, pad))
         ttk.Label(inner, text="Aşağı (+):").grid(row=0, column=0, sticky="e")
@@ -827,10 +904,6 @@ class LabelApp(tk.Tk):
         ttk.Label(inner, text="Sağa (+):").grid(row=0, column=2, sticky="e")
         ttk.Spinbox(inner, from_=-10, to=30, increment=0.5, textvariable=self.inner_right_mm_var, width=6).grid(row=0, column=3, padx=(4,16))
         ttk.Button(inner, text="Uygula", command=self._apply_inner_offsets).grid(row=0, column=4, padx=(4,12))
-        ttk.Button(inner, text="Aşağı +0.5", command=lambda: self._nudge_inner(0.5, 0)).grid(row=0, column=5, padx=2)
-        ttk.Button(inner, text="Yukarı -0.5", command=lambda: self._nudge_inner(-0.5, 0)).grid(row=0, column=6, padx=2)
-        ttk.Button(inner, text="Sağa +0.5", command=lambda: self._nudge_inner(0, 0.5)).grid(row=0, column=7, padx=2)
-        ttk.Button(inner, text="Sola -0.5", command=lambda: self._nudge_inner(0, -0.5)).grid(row=0, column=8, padx=2)
         ttk.Checkbutton(inner, text="Debug Çerçeve", variable=self.debug_frame_var).grid(row=0, column=9, padx=(24,0))
 
         mid = ttk.Frame(self)
@@ -838,20 +911,14 @@ class LabelApp(tk.Tk):
 
         weight_frame = ttk.LabelFrame(mid, text="Ağırlık")
         weight_frame.pack(side="left", fill="both", expand=True, padx=(0, pad), pady=(0, pad))
-
-        big = ttk.Frame(weight_frame)
-        big.pack(fill="x", padx=pad, pady=pad)
-
+        big = ttk.Frame(weight_frame); big.pack(fill="x", padx=pad, pady=pad)
         self.weight_label = ttk.Label(big, textvariable=self.weight_var, font=("Segoe UI", 36, "bold"))
         self.weight_label.pack(side="left")
-
         self.stable_label = ttk.Label(big, textvariable=self.stable_var, foreground="red", font=("Segoe UI", 12, "bold"))
         self.stable_label.pack(side="left", padx=12)
-
         ttk.Label(weight_frame, textvariable=self.weight_kg_var, font=("Segoe UI", 16)).pack(anchor="w", padx=pad)
 
-        status_frame = ttk.Frame(weight_frame)
-        status_frame.pack(fill="x", padx=pad, pady=(4, pad))
+        status_frame = ttk.Frame(weight_frame); status_frame.pack(fill="x", padx=pad, pady=(4, pad))
         ttk.Label(status_frame, text="Durum: ").pack(side="left")
         ttk.Label(status_frame, textvariable=self.job_status_var, font=("Segoe UI", 10, "italic")).pack(side="left")
 
@@ -867,33 +934,23 @@ class LabelApp(tk.Tk):
 
         right = ttk.LabelFrame(self, text="Önizleme ve Kayıtlar")
         right.pack(fill="both", expand=True, padx=pad, pady=(0, pad))
-
         self.preview_canvas = tk.Canvas(right, width=380, height=380, bg="#f2f2f2", highlightthickness=1, relief="sunken")
         self.preview_canvas.pack(side="left", padx=pad, pady=pad)
 
-        nb = ttk.Notebook(right)
-        nb.pack(side="left", fill="both", expand=True, padx=(0, pad), pady=pad)
+        nb = ttk.Notebook(right); nb.pack(side="left", fill="both", expand=True, padx=(0, pad), pady=pad)
+        log_tab = ttk.Frame(nb); raw_tab = ttk.Frame(nb)
+        nb.add(log_tab, text="Günlük"); nb.add(raw_tab, text="Ham Tartı")
 
-        log_tab = ttk.Frame(nb)
-        raw_tab = ttk.Frame(nb)
-        nb.add(log_tab, text="Günlük")
-        nb.add(raw_tab, text="Ham Tartı")
-
-        self.log_text = tk.Text(log_tab, height=14, wrap="word", state="disabled")
-        self.log_text.pack(fill="both", expand=True)
+        self.log_text = tk.Text(log_tab, height=14, wrap="word", state="disabled"); self.log_text.pack(fill="both", expand=True)
         ttk.Button(log_tab, text="Günlüğü Temizle", command=self._clear_log).pack(anchor="e", padx=pad, pady=(4,0))
-
-        self.raw_text = tk.Text(raw_tab, height=14, wrap="none", state="disabled")
-        self.raw_text.pack(fill="both", expand=True)
+        self.raw_text = tk.Text(raw_tab, height=14, wrap="none", state="disabled"); self.raw_text.pack(fill="both", expand=True)
         ttk.Button(raw_tab, text="Ham Veriyi Temizle", command=self._clear_raw).pack(anchor="e", padx=pad, pady=(4,0))
 
-    # ---------- Bağlantı ----------
+    # ---------- bağlantı ----------
     def _refresh_ports(self):
-        scale_guess = auto_serial_port_terazi()
-        prn_guess = auto_serial_port_yazici()
-        self.scale_port_var.set(scale_guess or "(yok)")
-        self.printer_port_var.set(prn_guess or "(yok)")
-        self._log(f"Port keşfi -> Terazi: {scale_guess} | Yazıcı: {prn_guess}")
+        self.scale_port_var.set(auto_serial_port_terazi() or "(yok)")
+        self.printer_port_var.set(auto_serial_port_yazici() or "(yok)")
+        self._log(f"Port keşfi -> Terazi: {self.scale_port_var.get()} | Yazıcı: {self.printer_port_var.get()}")
 
     def _auto_connect(self):
         self._refresh_ports()
@@ -901,39 +958,29 @@ class LabelApp(tk.Tk):
 
     def _map_parity(self, name: str):
         name = (name or "").upper()
-        if name == "NONE":
-            return serial.PARITY_NONE
-        if name == "EVEN":
-            return serial.PARITY_EVEN
+        if name == "NONE": return serial.PARITY_NONE
+        if name == "EVEN": return serial.PARITY_EVEN
         return serial.PARITY_ODD
 
     def _reconnect_ports(self):
-        # Terazi
         scl = self.scale_port_var.get()
         if scl and scl != "(yok)":
             try:
-                if self.ser_terazi and self.ser_terazi.is_open:
-                    self.ser_terazi.close()
+                if self.ser_terazi and self.ser_terazi.is_open: self.ser_terazi.close()
                 self.ser_terazi = serial.Serial(
-                    port=scl,
-                    baudrate=int(self.serial_baud_var.get() or SCL_BAUD),
-                    bytesize=serial.EIGHTBITS,
-                    parity=self._map_parity(self.serial_parity_var.get() or "ODD"),
-                    stopbits=serial.STOPBITS_ONE,
-                    timeout=SCL_TIMEOUT,
-                    xonxoff=self.xonxoff_var.get(),
+                    port=scl, baudrate=int(self.serial_baud_var.get() or SCL_BAUD),
+                    bytesize=serial.EIGHTBITS, parity=self._map_parity(self.serial_parity_var.get() or "ODD"),
+                    stopbits=serial.STOPBITS_ONE, timeout=SCL_TIMEOUT, xonxoff=self.xonxoff_var.get(),
                 )
                 time.sleep(0.15)
                 self._log(f"Terazi bağlandı: {scl} (baud={self.ser_terazi.baudrate}, parity={self.serial_parity_var.get()}, xonxoff={self.xonxoff_var.get()}, mode={'POLL' if self.poll_mode.get() else 'LISTEN'})")
             except Exception as e:
                 self._log(f"Terazi bağlanamadı ({scl}): {e}")
 
-        # Yazıcı
         prn = self.printer_port_var.get()
         if prn and prn != "(yok)":
             try:
-                if self.ser_yazici and self.ser_yazici.is_open:
-                    self.ser_yazici.close()
+                if self.ser_yazici and self.ser_yazici.is_open: self.ser_yazici.close()
                 self.ser_yazici = serial.Serial(
                     port=prn, baudrate=PRN_BAUD, bytesize=serial.EIGHTBITS,
                     parity=PRN_PARITY, stopbits=serial.STOPBITS_ONE, timeout=PRN_TIMEOUT,
@@ -944,40 +991,28 @@ class LabelApp(tk.Tk):
             except Exception as e:
                 self._log(f"Yazıcı bağlanamadı ({prn}): {e}")
 
-    # ---------- Fiziksel / İç ofset uygulama ----------
+    # ---------- fiziksel / içerik ofsetleri ----------
     def _apply_physical_shifts(self):
         global PHYS_SHIFT_DOWN_MM, H_SHIFT_MM
         PHYS_SHIFT_DOWN_MM = float(self.vert_mm_var.get())
         H_SHIFT_MM = float(self.horz_mm_var.get())
         self._log(f"Fiziksel ofset uygulandı: aşağı={PHYS_SHIFT_DOWN_MM:.2f} mm, sola={H_SHIFT_MM:.2f} mm")
 
-    def _nudge_phys(self, d_down_mm: float, d_left_mm: float):
-        self.vert_mm_var.set(self.vert_mm_var.get() + d_down_mm)
-        self.horz_mm_var.set(self.horz_mm_var.get() + d_left_mm)
-        self._apply_physical_shifts()
-
     def _apply_inner_offsets(self):
         self._log(f"İçerik başlangıç noktası: aşağı={self.inner_down_mm_var.get():.2f} mm, sağa={self.inner_right_mm_var.get():.2f} mm (Debug={self.debug_frame_var.get()})")
-
-    def _nudge_inner(self, d_down_mm: float, d_right_mm: float):
-        self.inner_down_mm_var.set(self.inner_down_mm_var.get() + d_down_mm)
-        self.inner_right_mm_var.set(self.inner_right_mm_var.get() + d_right_mm)
-        self._apply_inner_offsets()
 
     # ---------- GUI olayları ----------
     def _do_tare(self):
         if self.ser_terazi and self.ser_terazi.is_open:
             try:
-                _ = send_ad2k_command(self.ser_terazi, b'T')
-                self._log("DARA komutu gönderildi.")
+                _ = send_ad2k_command(self.ser_terazi, b'T'); self._log("DARA komutu gönderildi.")
             except Exception as e:
                 self._log(f"DARA hata: {e}")
 
     def _do_zero(self):
         if self.ser_terazi and self.ser_terazi.is_open:
             try:
-                _ = send_ad2k_command(self.ser_terazi, b'Z')
-                self._log("SIFIR komutu gönderildi.")
+                _ = send_ad2k_command(self.ser_terazi, b'Z'); self._log("SIFIR komutu gönderildi.")
             except Exception as e:
                 self._log(f"SIFIR hata: {e}")
 
@@ -989,19 +1024,15 @@ class LabelApp(tk.Tk):
     def _local_done(self):
         self.sending_data_local = False
         self.job_status_var.set("Yerel DONE (akış durdu)")
-        self._log("Yerel DONE gönderildi, yerel akış durdu.")
+        self._log("Yerel DONE gönderildi.")
 
     def _clear_log(self):
-        self.log_text.configure(state="normal")
-        self.log_text.delete("1.0", "end")
-        self.log_text.configure(state="disabled")
+        self.log_text.configure(state="normal"); self.log_text.delete("1.0", "end"); self.log_text.configure(state="disabled")
 
     def _clear_raw(self):
-        self.raw_text.configure(state="normal")
-        self.raw_text.delete("1.0", "end")
-        self.raw_text.configure(state="disabled")
+        self.raw_text.configure(state="normal"); self.raw_text.delete("1.0", "end"); self.raw_text.configure(state="disabled")
 
-    # ---------- İş parçacıkları ----------
+    # ---------- iş parçacıkları ----------
     def _job_worker(self):
         while not self.stop_event.is_set():
             try:
@@ -1014,8 +1045,7 @@ class LabelApp(tk.Tk):
                     if job_str == "start":
                         self.print_single_mode = bool(job.get("print_single", False))
                         self._set_remote_stream(True, mrp_id)
-                        self.stable_queue.clear()
-                        self.sent_last_weight = None
+                        self.stable_queue.clear(); self.sent_last_weight = None
                         self._log(f"Odoo START: print_single={self.print_single_mode}")
                         self.last_action_id = action_id
 
@@ -1026,44 +1056,34 @@ class LabelApp(tk.Tk):
 
                     elif job_str == "tare":
                         if self.ser_terazi and self.ser_terazi.is_open:
-                            try:
-                                _ = send_ad2k_command(self.ser_terazi, b'T')
-                                self._log("Odoo TARE: Dara gönderildi.")
-                            except Exception as e:
-                                self._log(f"Odoo TARE hata: {e}")
+                            try: _ = send_ad2k_command(self.ser_terazi, b'T'); self._log("Odoo TARE.")
+                            except Exception as e: self._log(f"Odoo TARE hata: {e}")
                         self.last_action_id = action_id
 
                     elif job_str == "zero":
                         if self.ser_terazi and self.ser_terazi.is_open:
-                            try:
-                                _ = send_ad2k_command(self.ser_terazi, b'Z')
-                                self._log("Odoo ZERO: Sıfır gönderildi.")
-                            except Exception as e:
-                                self._log(f"Odoo ZERO hata: {e}")
+                            try: _ = send_ad2k_command(self.ser_terazi, b'Z'); self._log("Odoo ZERO.")
+                            except Exception as e: self._log(f"Odoo ZERO hata: {e}")
                         self.last_action_id = action_id
 
                     elif job_str in ("print_series", "print_n", "print_fixed"):
                         token = self._get_job_token(job)
                         if token in self.processed_series_tokens:
-                            self._log(f"Aynı create_date'li seri iş zaten işlendi (token={token}), atlandı.")
-                            self.last_action_id = action_id
-                            continue
+                            self._log(f"Aynı seri iş atlandı (token={token}).")
+                            self.last_action_id = action_id; continue
 
                         copies = int(job.get("copies") or 1)
                         delay_sec = int(job.get("delay_sec") or 5)
                         fixed_weight = int(job.get("weight") or 0)
                         payload_override = job.get("payload") or {}
                         if isinstance(payload_override, str):
-                            try:
-                                payload_override = json.loads(payload_override)
-                            except Exception:
-                                payload_override = {}
+                            try: payload_override = json.loads(payload_override)
+                            except Exception: payload_override = {}
 
                         payload_from_odoo, resp_copies = self._fetch_label_payload_from_odoo(mrp_id, fixed_weight)
                         if payload_from_odoo is None:
                             self._log("Odoo payload alınamadı; seri baskı atlandı.")
-                            self.last_action_id = action_id
-                            continue
+                            self.last_action_id = action_id; continue
 
                         payload = {**payload_from_odoo, **payload_override}
                         if FORCE_SANS_SERIF and not payload.get("font_path"):
@@ -1078,8 +1098,7 @@ class LabelApp(tk.Tk):
                             self._log(f" -> {i+1}/{eff_copies} basıldı")
                             if i < eff_copies - 1:
                                 for _ in range(delay_sec * 10):
-                                    if self.stop_event.is_set():
-                                        break
+                                    if self.stop_event.is_set(): break
                                     time.sleep(0.1)
 
                         self.processed_series_tokens.add(token)
@@ -1089,8 +1108,7 @@ class LabelApp(tk.Tk):
             except Exception as e:
                 self._log(f"JobWorker hata: {e}")
             for _ in range(5):
-                if self.stop_event.is_set():
-                    break
+                if self.stop_event.is_set(): break
                 time.sleep(0.05)
 
     def _scale_worker(self):
@@ -1098,53 +1116,41 @@ class LabelApp(tk.Tk):
         while not self.stop_event.is_set():
             try:
                 if not (self.ser_terazi and self.ser_terazi.is_open):
-                    time.sleep(0.2)
-                    continue
+                    time.sleep(0.2); continue
 
                 if self.poll_mode.get():
                     resp = send_ad2k_command(self.ser_terazi, b'RN\x1C', response_timeout=0.4)
-                    if resp:
-                        self._push_raw(resp)
+                    if resp: self._push_raw(resp)
                     buffer += resp
                     extra = self.ser_terazi.read(self.ser_terazi.in_waiting or 0)
-                    if extra:
-                        self._push_raw(extra)
-                        buffer += extra
+                    if extra: self._push_raw(extra); buffer += extra
                 else:
                     chunk = self.ser_terazi.read(128)
-                    if chunk:
-                        self._push_raw(chunk)
-                        buffer += chunk
+                    if chunk: self._push_raw(chunk); buffer += chunk
 
                 while b"\r" in buffer or b"\n" in buffer:
                     sep = b"\r" if b"\r" in buffer else b"\n"
                     line, buffer = buffer.split(sep, 1)
-                    if not line:
-                        continue
+                    if not line: continue
 
                     weight = parse_weight_line(line)
-                    if weight is None:
-                        continue
+                    if weight is None: continue
 
                     self._update_weight_display(weight)
                     self.stable_queue.append(weight)
                     is_stable = stable_value(self.stable_queue, SENSITIVITY_GRAM)
                     self._set_stable(is_stable)
 
-                    if not self._effective_sending():
-                        continue
+                    if not self._effective_sending(): continue
                     mrp_id = self.current_mrp_id
-                    if not mrp_id or not is_stable:
-                        continue
+                    if not mrp_id or not is_stable: continue
                     if self.sent_last_weight is not None and abs(self.sent_last_weight - weight) < SENSITIVITY_GRAM:
                         continue
 
                     payload_from_odoo, resp_copies = self._fetch_label_payload_from_odoo(mrp_id, weight)
                     if payload_from_odoo is None:
                         self._log("Odoo payload alınamadı; baskı atlandı.")
-                        self.stable_queue.clear()
-                        self.sent_last_weight = weight
-                        continue
+                        self.stable_queue.clear(); self.sent_last_weight = weight; continue
 
                     payload = dict(payload_from_odoo)
                     if FORCE_SANS_SERIF and not payload.get("font_path"):
@@ -1173,7 +1179,7 @@ class LabelApp(tk.Tk):
                 self._log(f"ScaleWorker hata: {e}")
                 time.sleep(0.2)
 
-    # ---------- Yardımcılar ----------
+    # ---------- yardımcılar ----------
     def _send_label(self, payload: Dict[str, Any]):
         try:
             send_label_image_to_printer(
@@ -1182,20 +1188,17 @@ class LabelApp(tk.Tk):
                 feed_after_lines=FEED_AFTER_LINES,
                 preview_only=self.preview_only.get(),
                 on_preview_image=self._update_preview_image,
-                inner_dx_mm=self.inner_right_mm_var.get(),   # içerik sağa (+)
-                inner_dy_mm=self.inner_down_mm_var.get(),    # içerik aşağı (+)
+                inner_dx_mm=self.inner_right_mm_var.get(),
+                inner_dy_mm=self.inner_down_mm_var.get(),
                 debug_frame=self.debug_frame_var.get()
             )
         except Exception as e:
             self._log(f"Baskı hatası: {e}")
 
     def _update_preview_image(self, pil_img: Image.Image):
-        if not self.preview_canvas:
-            return
-        c_w = int(self.preview_canvas["width"])
-        c_h = int(self.preview_canvas["height"])
-        img = pil_img.copy()
-        img.thumbnail((c_w, c_h), Image.LANCZOS)
+        if not self.preview_canvas: return
+        c_w = int(self.preview_canvas["width"]); c_h = int(self.preview_canvas["height"])
+        img = pil_img.copy(); img.thumbnail((c_w, c_h), Image.LANCZOS)
         self.preview_photo = ImageTk.PhotoImage(img)
         self.preview_canvas.delete("all")
         self.preview_canvas.create_image(c_w//2, c_h//2, image=self.preview_photo)
@@ -1206,11 +1209,9 @@ class LabelApp(tk.Tk):
 
     def _set_stable(self, is_stable: bool):
         if is_stable:
-            self.stable_var.set("Stabil")
-            self.stable_label.configure(foreground="green")
+            self.stable_var.set("Stabil"); self.stable_label.configure(foreground="green")
         else:
-            self.stable_var.set("Kararsız")
-            self.stable_label.configure(foreground="red")
+            self.stable_var.set("Kararsız"); self.stable_label.configure(foreground="red")
 
     def _effective_sending(self) -> bool:
         return self.sending_data_remote or self.sending_data_local
@@ -1225,94 +1226,68 @@ class LabelApp(tk.Tk):
 
     def _log(self, msg: str):
         ts = time.strftime("%H:%M:%S")
-        try:
-            self.log_q.put_nowait(f"[{ts}] {msg}")
-        except Exception:
-            pass
+        try: self.log_q.put_nowait(f"[{ts}] {msg}")
+        except Exception: pass
 
     def _push_raw(self, data: bytes):
-        if not self.show_raw.get() or not data:
-            return
-        try:
-            s = data.decode(errors="ignore")
-        except Exception:
-            s = repr(data)
+        if not self.show_raw.get() or not data: return
+        try: s = data.decode(errors="ignore")
+        except Exception: s = repr(data)
         for part in re.split(r'[\r\n]+', s):
             if part:
-                try:
-                    self.raw_q.put_nowait(part)
-                except Exception:
-                    pass
+                try: self.raw_q.put_nowait(part)
+                except Exception: pass
 
     def _read_raw_3s(self):
         if not (self.ser_terazi and self.ser_terazi.is_open):
-            self._log("Ham okuma: Terazi bağlı değil.")
-            return
+            self._log("Ham okuma: Terazi bağlı değil."); return
         def run():
-            self._log("Ham okuma başlatıldı (3 sn).")
+            self._log("Ham okuma (3 sn) başladı.")
             end = time.time() + 3.0
             while time.time() < end and not self.stop_event.is_set():
                 try:
                     chunk = self.ser_terazi.read(256)
-                    if chunk:
-                        self._push_raw(chunk)
+                    if chunk: self._push_raw(chunk)
                 except Exception as e:
-                    self._log(f"Ham okuma hata: {e}")
-                    break
+                    self._log(f"Ham okuma hata: {e}"); break
                 time.sleep(0.01)
             self._log("Ham okuma bitti.")
         threading.Thread(target=run, daemon=True).start()
 
     def _gui_pulse(self):
         while True:
-            try:
-                line = self.log_q.get_nowait()
-            except queue.Empty:
-                break
+            try: line = self.log_q.get_nowait()
+            except queue.Empty: break
             else:
-                self.log_text.configure(state="normal")
-                self.log_text.insert("end", line + "\n")
-                self.log_text.see("end")
-                self.log_text.configure(state="disabled")
-
+                self.log_text.configure(state="normal"); self.log_text.insert("end", line + "\n")
+                self.log_text.see("end"); self.log_text.configure(state="disabled")
         while True:
-            try:
-                raw = self.raw_q.get_nowait()
-            except queue.Empty:
-                break
+            try: raw = self.raw_q.get_nowait()
+            except queue.Empty: break
             else:
-                self.raw_text.configure(state="normal")
-                self.raw_text.insert("end", raw + "\n")
-                self.raw_text.see("end")
-                self.raw_text.configure(state="disabled")
-
+                self.raw_text.configure(state="normal"); self.raw_text.insert("end", raw + "\n")
+                self.raw_text.see("end"); self.raw_text.configure(state="disabled")
         self.after(100, self._gui_pulse)
 
     def _on_close(self):
         if messagebox.askokcancel("Çıkış", "Uygulamadan çıkılsın mı?"):
             self.stop_event.set()
             try:
-                if self.ser_terazi and self.ser_terazi.is_open:
-                    self.ser_terazi.close()
-            except Exception:
-                pass
+                if self.ser_terazi and self.ser_terazi.is_open: self.ser_terazi.close()
+            except Exception: pass
             try:
-                if self.ser_yazici and self.ser_yazici.is_open:
-                    self.ser_yazici.close()
-            except Exception:
-                pass
+                if self.ser_yazici and self.ser_yazici.is_open: self.ser_yazici.close()
+            except Exception: pass
             self.destroy()
 
-    # ---------- Ağ ve iş mantığı ----------
+    # ---------- ağ ----------
     def _fetch_job(self) -> Dict[str, Any]:
         try:
             resp = requests.get(GET_JOB_URL, timeout=4)
             if resp.status_code == 200:
                 data = resp.json()
-                if isinstance(data, list) and data:
-                    return data[0]
-                if isinstance(data, dict):
-                    return data
+                if isinstance(data, list) and data: return data[0]
+                if isinstance(data, dict): return data
         except Exception as e:
             self._log(f"Odoo iş çekme hatası: {e}")
         return {"job": "", "mrp_id": None}
@@ -1343,8 +1318,7 @@ class LabelApp(tk.Tk):
         cnt = payload.get("count")
         try:
             n = int(str(cnt).strip())
-            if n > 0:
-                return n
+            if n > 0: return n
         except Exception:
             pass
         return 1
