@@ -58,7 +58,7 @@ DEVICE_WIDTH_BYTES = 108
 DEVICE_WIDTH_DOTS  = DEVICE_WIDTH_BYTES * 8  # 864
 
 DATA_CHUNK_SIZE = 4096
-FEED_AFTER_LINES = 0  # 1 satır boşluk atmasın diye 0
+FEED_AFTER_LINES = 0  # Başta boş satır istemediğimiz için 0
 
 # Tuval ve işleme
 REQ_W = 748
@@ -68,31 +68,35 @@ ROTATE_180 = True
 THRESHOLD = 192
 INVERT_BW = False
 
-# Dikey ofset (etiketi fiziksel baskıda 1 cm yukarı almak için)
-# 203dpi (8 dot/mm) varsayımıyla 1 cm = 10 mm -> 80 dot
-DPMM = 8  # 203 dpi yazıcılar için ~8 dot/mm
+# Dikey ofsetler (önceki isteklerle aynı)
+# 203dpi (~8 dot/mm) varsayımıyla 1 cm = 10 mm -> 80 dot
+DPMM = 8
+# Tüm etiketi fiziksel olarak 1 cm yukarı al
 SHIFT_UP_MM = 10
 SHIFT_UP_DOTS = int(round(SHIFT_UP_MM * DPMM))
+# Sadece başlığı (product_name) 1 cm aşağı al (fiziksel)
+TITLE_SHIFT_DOWN_MM = 10
+TITLE_SHIFT_DOTS = int(round(TITLE_SHIFT_DOWN_MM * DPMM))
 
-# Yerleşim
+# Yerleşim: orijinale yakın olmak için daha sola başlat ve biraz daralt
 TITLE_Y = 60
 LEFT_BLOCK_Y = 150
 LEFT_BLOCK_GAP = 44
-LEFT_MARGIN = 32
-LEFT_COL_WIDTH = 300
-COL_GAP = 20
-RIGHT_BARCODE_HEIGHT = 120
+LEFT_MARGIN = 16           # 32 -> 16 (başlangıç daha solda)
+LEFT_COL_WIDTH = 270       # 300 -> 270
+COL_GAP = 16               # 20 -> 16
+RIGHT_BARCODE_HEIGHT = 108 # 120 -> 108 (orijinale yakın, biraz daha küçük)
 
-# Font adayları
-DEFAULT_FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    r"C:\Windows\Fonts\arial.ttf",
-    r"C:\Windows\Fonts\segoeui.ttf",
-]
+# Fontlar: “bir tık” daha küçük
 def get_default_font_path() -> Optional[str]:
-    for p in DEFAULT_FONT_CANDIDATES:
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+    ]
+    for p in candidates:
         try:
             if os.path.exists(p):
                 return p
@@ -100,6 +104,26 @@ def get_default_font_path() -> Optional[str]:
             pass
     return None
 DEFAULT_FONT_PATH = get_default_font_path()
+
+def load_font(font_path: str | None, size: int) -> ImageFont.ImageFont:
+    try_paths: List[Optional[str]] = []
+    if font_path:
+        try_paths.append(font_path)
+    try_paths.extend([
+        DEFAULT_FONT_PATH,
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+    ])
+    for p in try_paths:
+        if not p:
+            continue
+        try:
+            if os.path.exists(p):
+                return ImageFont.truetype(p, size=size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
 
 # =========================
 # Terazi (AD2K) Ayarları
@@ -120,21 +144,6 @@ def round_to_8(n: int) -> int:
 WIDTH_DOTS = round_to_8(REQ_W)   # 752
 HEIGHT_DOTS = REQ_H
 LABEL_WIDTH_BYTES = WIDTH_DOTS // 8  # 94
-
-def load_font(font_path: str | None, size: int) -> ImageFont.ImageFont:
-    try_paths: List[Optional[str]] = []
-    if font_path:
-        try_paths.append(font_path)
-    try_paths.extend(DEFAULT_FONT_CANDIDATES)
-    for p in try_paths:
-        if not p:
-            continue
-        try:
-            if os.path.exists(p):
-                return ImageFont.truetype(p, size=size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
 
 def text_wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> str:
     if not text:
@@ -214,17 +223,20 @@ def compose_label(data: Dict[str, Any], width_dots: int, height_dots: int, forbi
     canvas = Image.new("RGB", (width_dots, height_dots), (255, 255, 255))
     draw = ImageDraw.Draw(canvas)
 
-    f_title = load_font(font_path, 44)
-    f_sub   = load_font(font_path, 26)
-    f_label = load_font(font_path, 24)
-    f_text  = load_font(font_path, 20)
-    f_bar   = load_font(font_path, 20)
+    # “Bir tık” küçültülmüş fontlar
+    f_title = load_font(font_path, 36)
+    f_sub   = load_font(font_path, 22)
+    f_label = load_font(font_path, 20)
+    f_text  = load_font(font_path, 16)
+    f_bar   = load_font(font_path, 16)
 
+    # Başlık: sola yaslı ve SADECE başlık 1 cm aşağı (fiziksel) kaydırıldı
     product = str(data.get("product_name", "")).strip()
     if product:
-        tw = draw.textlength(product, font=f_title)
-        draw.text(((width_dots - tw)//2, TITLE_Y), product, font=f_title, fill=(0,0,0))
+        title_y_effective = TITLE_Y + (-TITLE_SHIFT_DOTS if ROTATE_180 else +TITLE_SHIFT_DOTS)
+        draw.text((LEFT_MARGIN, title_y_effective), product, font=f_title, fill=(0,0,0))
 
+    # Sol blok (daha sola başlatıldı)
     y0 = LEFT_BLOCK_Y
     left_x = LEFT_MARGIN
     label_w = 120
@@ -241,6 +253,7 @@ def compose_label(data: Dict[str, Any], width_dots: int, height_dots: int, forbi
     draw.text((left_x, y2), "S.T.T.:", font=f_label, fill=(0,0,0))
     draw.text((val_x,  y2), str(data.get("expiry", "")), font=f_label, fill=(0,0,0))
 
+    # Sağ barkod sütunu: toplam genişlik daraldı, hizalamayı koruyoruz
     right_x = LEFT_MARGIN + LEFT_COL_WIDTH + COL_GAP
     right_w = max(200, width_dots - right_x - LEFT_MARGIN)
     bar_x = right_x
@@ -252,6 +265,7 @@ def compose_label(data: Dict[str, Any], width_dots: int, height_dots: int, forbi
     last_barcode_y = bar_top + bar_h + max(12, int(RIGHT_BARCODE_HEIGHT * 0.18)) + 4
     text_top = max(last_left_y, last_barcode_y) + 16
 
+    # Alt metin bloğu (sola yaslı)
     safe_h = height_dots - forbid_bottom_px
     block_h = max(0, safe_h - text_top - 8)
     block_w = width_dots - 2*LEFT_MARGIN
@@ -275,9 +289,6 @@ def compose_label(data: Dict[str, Any], width_dots: int, height_dots: int, forbi
     return canvas
 
 def shift_image_vertical(img: Image.Image, dy: int, fill=(255, 255, 255)) -> Image.Image:
-    """
-    Görüntüyü dikey eksende kaydırır. dy < 0: yukarı, dy > 0: aşağı (piksel koordinatlarına göre).
-    """
     w, h = img.size
     out = Image.new(img.mode, (w, h), fill)
     out.paste(img, (0, dy))
@@ -369,9 +380,7 @@ def send_single_esc_v_height_only(ser: serial.Serial, raw_padded: bytes, rows: i
 def send_label_image_to_printer(ser_yazici: Optional[serial.Serial], payload: Dict[str, Any], feed_after_lines: int, preview_only: bool, on_preview_image=None):
     img = compose_label(payload, WIDTH_DOTS, HEIGHT_DOTS, BOTTOM_FORBID)
 
-    # DİKKAT: Tersten baskıda (ROTATE_180=True) fiziksel olarak "yukarı" istendi.
-    # Kullanıcı geri bildirimi: negatif dy aşağı, pozitif dy yukarı etkisi vermiş.
-    # Bu nedenle burada pozitif dy kullanıyoruz.
+    # Tüm resmi fiziksel olarak 1 cm yukarı kaydır (kullanıcı geri bildirimiyle doğrulandı)
     if SHIFT_UP_DOTS != 0:
         img = shift_image_vertical(img, dy=+SHIFT_UP_DOTS, fill=(255, 255, 255))
 
@@ -463,7 +472,7 @@ def parse_weight_line(line):
         if total_gram < 5:
             return None
         return total_gram
-    # Yedek kalıplar (isteğe bağlı genişletilebilir)
+    # Yedek kalıplar
     m2 = re.search(r'([-+]?\d+(?:[.,]\d+)?)\s*(kg|g)\b', line, re.IGNORECASE)
     if m2:
         val = m2.group(1).replace(",", ".")
@@ -499,42 +508,27 @@ def _port_matches(tokens: List[str], info) -> bool:
     return any(tok in low_fields for tok in tokens)
 
 def auto_serial_port_terazi() -> Optional[str]:
-    """
-    Terazi port seçimi:
-    1) TERAZI_PORT ortam değişkeni varsa onu kullan.
-    2) Windows'ta listelenen portlar içinde COM1 varsa onu tercih et.
-    3) Token eşleşmelerine göre akıllı seçim yap.
-    4) Hiçbiri olmazsa fallback döndür (Windows: COM1, Unix: /dev/ttyUSB0).
-    """
     env = os.getenv("TERAZI_PORT")
     if env:
         return env
-
     try:
         ports = list(list_ports.comports())
     except Exception:
         ports = []
-
-    # Windows'ta COM1'i özellikle tercih et
     if IS_WINDOWS and ports:
         for p in ports:
             if str(p.device).upper() == "COM1":
                 return "COM1"
-
     if not ports:
         return SCL_PORT_FALLBACK
-
     tokens_primary = ["ftdi", "ad", "terazi", "scale", "weigh"]
     tokens_secondary = ["usb", "serial", "com"]
-
     for p in ports:
         if _port_matches(tokens_primary, p):
             return p.device
     for p in ports:
         if _port_matches(tokens_secondary, p):
             return p.device
-
-    # Son çare: ilk port ya da fallback
     return ports[0].device if ports else SCL_PORT_FALLBACK
 
 def auto_serial_port_yazici() -> str:
@@ -759,10 +753,6 @@ class LabelApp(tk.Tk):
 
     # ---------- İş parçacıkları ----------
     def _job_worker(self):
-        """
-        Odoo'dan komut çeker ve "print_series/print_fixed" gibi terazisiz baskıları yürütür.
-        'start'/'done' durumlarını günceller. ScaleWorker baskı tetikler (stabil ağırlıkta).
-        """
         while not self.stop_event.is_set():
             try:
                 job = self._fetch_job()
@@ -848,21 +838,15 @@ class LabelApp(tk.Tk):
                         self.last_action_id = action_id
             except Exception as e:
                 self._log(f"JobWorker hata: {e}")
-            # Döngü gecikmesi
             for _ in range(5):
                 if self.stop_event.is_set():
                     break
                 time.sleep(0.05)
 
     def _scale_worker(self):
-        """
-        Tartıdan periyodik okuma yapar, GUI'yi günceller.
-        Eğer akış etkin (Odoo veya yerel) ve mrp_id mevcutsa, stabil ve farklı ağırlıkta baskıyı tetikler.
-        """
         buffer = b""
         while not self.stop_event.is_set():
             try:
-                # Terazi bağlıysa oku
                 if not (self.ser_terazi and self.ser_terazi.is_open):
                     time.sleep(0.2)
                     continue
@@ -874,15 +858,12 @@ class LabelApp(tk.Tk):
                     weight = parse_weight_line(line)
                     if weight is None:
                         continue
-                    # Ağırlık gösterimi
                     self._update_weight_display(weight)
 
-                    # Kararlılık kuyruğu
                     self.stable_queue.append(weight)
                     is_stable = stable_value(self.stable_queue, SENSITIVITY_GRAM)
                     self._set_stable(is_stable)
 
-                    # Baskı koşulları
                     if not self._effective_sending():
                         continue
                     mrp_id = self.current_mrp_id
@@ -893,7 +874,6 @@ class LabelApp(tk.Tk):
                     if self.sent_last_weight is not None and abs(self.sent_last_weight - weight) < SENSITIVITY_GRAM:
                         continue
 
-                    # Odoo'dan payload ve baskı
                     payload_from_odoo, resp_copies = self._fetch_label_payload_from_odoo(mrp_id, weight)
                     if payload_from_odoo is None:
                         self._log("Odoo payload alınamadı; baskı atlandı.")
@@ -917,7 +897,6 @@ class LabelApp(tk.Tk):
                     self.sent_last_weight = weight
 
                     if self.print_single_mode:
-                        # Tek baskı modu: akışı kapat
                         self.sending_data_remote = False
                         self.sending_data_local = False
                         self.job_status_var.set("Tek baskı tamamlandı, akış kapatıldı.")
@@ -939,7 +918,6 @@ class LabelApp(tk.Tk):
             self._log(f"Baskı hatası: {e}")
 
     def _update_preview_image(self, pil_img: Image.Image):
-        # Etiket önizleme alanına sığdır
         if not self.preview_canvas:
             return
         c_w = int(self.preview_canvas["width"])
@@ -981,7 +959,6 @@ class LabelApp(tk.Tk):
             pass
 
     def _gui_pulse(self):
-        # Log'ları boşalt
         drained = False
         while True:
             try:
@@ -994,13 +971,11 @@ class LabelApp(tk.Tk):
                 self.log_text.insert("end", line + "\n")
                 self.log_text.see("end")
                 self.log_text.configure(state="disabled")
-        # Periyodik tekrar
         self.after(100, self._gui_pulse)
 
     def _on_close(self):
         if messagebox.askokcancel("Çıkış", "Uygulamadan çıkılsın mı?"):
             self.stop_event.set()
-            # Bağlantıları kapat
             try:
                 if self.ser_terazi and self.ser_terazi.is_open:
                     self.ser_terazi.close()
