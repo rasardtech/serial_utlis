@@ -6,6 +6,7 @@ from __future__ import annotations
 # - Başlık (ürün adı) üstten kesilmesin diye minimum üst güvenli boşluk eklendi.
 # - Adet=1 ise satır gizli; Ağırlık/S.T.T. değerleri bold ve büyük; önekler/ALERJEN bold.
 # - parse_weight_line ve stable_value yeniden eklendi (silinmesin diye belirgin yorumlar bırakıldı).
+# - ALERJEN başlığı iki satıra bölünmüşse iki satır da bold çizilir (ingredients ve notes için).
 
 import os
 import re
@@ -87,7 +88,7 @@ RIGHT_BARCODE_HEIGHT = 108
 LABEL_VALUE_GAP_PX = 4
 
 # Başlık (ürün adı) ayarları
-PRODUCT_TITLE_GAP_MM = float(os.getenv("PRODUCT_TITLE_GAP_MM", "3.0"))         # barkod üstü ile başlık aralığı
+PRODUCT_TITLE_GAP_MM = float(os.getenv("PRODUCT_TITLE_GAP_MM", "2.0"))         # barkod üstü ile başlık aralığı
 PRODUCT_TITLE_TOP_SAFE_MM = float(os.getenv("PRODUCT_TITLE_TOP_SAFE_MM", "3.0"))  # sayfanın en üstünden güvenli boşluk
 PRODUCT_TITLE_GAP_PX = mm_to_dots(PRODUCT_TITLE_GAP_MM)
 PRODUCT_TITLE_TOP_SAFE_PX = mm_to_dots(PRODUCT_TITLE_TOP_SAFE_MM)
@@ -280,7 +281,7 @@ def parse_weight_line(line):
     if m:
         kg = int(m.group(1)); gr = int(m.group(2))
         grams = kg * 1000 + gr
-        if grams < 5 or grams > MAX_REALISTIC_GRAMS:
+        if grams < 5 or abs(grams) > MAX_REALISTIC_GRAMS:
             return None
         return grams
 
@@ -528,22 +529,50 @@ def compose_label(
                 yy += lh
             yy += 2
 
-        # Ingredients text
-        ingredients = str(data.get("ingredients", "") or "").strip()
-        if ingredients:
-            for para in ingredients.split("\n"):
-                p = para.strip()
+        def render_lines_with_allergen_rule(lines: List[str], yy: int, notes_mode: bool) -> int:
+            """
+            ALERJEN ile başlayan satırın yanı sıra, onu takip eden ilk dolu satırı da (başlık ikinci satır ise)
+            bold çizer. Böylece 'ALERJEN UYARISI:' iki satır olduğunda ikisi de bold olur.
+            """
+            i = 0
+            while i < len(lines) and yy < text_top + block_h:
+                p = (lines[i] or "").strip()
                 if not p:
                     yy += f_text.size + 6
-                    if yy >= text_top + block_h: break
+                    i += 1
                     continue
+
                 if _startswith_ci(p, "ALERJEN"):
+                    # Bu paragrafın tamamını bold sar ve çiz
                     wrapped = text_wrap(draw, p, f_text_b, block_w)
                     for ln in wrapped.splitlines():
                         lh = f_text_b.size + 6
                         if yy + lh > text_top + block_h: break
                         draw.text((LEFT_MARGIN, yy), ln, font=f_text_b, fill=(0,0,0))
                         yy += lh
+
+                    # Hemen sonraki dolu satırı da (varsa) bold çiz – sadece 1 satır
+                    if i + 1 < len(lines):
+                        p2 = (lines[i + 1] or "").strip()
+                        if p2:
+                            wrapped2 = text_wrap(draw, p2, f_text_b, block_w)
+                            for ln in wrapped2.splitlines():
+                                lh = f_text_b.size + 6
+                                if yy + lh > text_top + block_h: break
+                                draw.text((LEFT_MARGIN, yy), ln, font=f_text_b, fill=(0,0,0))
+                                yy += lh
+                            i += 1  # ikinci satırı tükettik
+                    i += 1
+                    continue
+
+                # Normal akış
+                if notes_mode:
+                    used_h, _ = draw_line_with_bold_prefix(
+                        draw, LEFT_MARGIN, yy, block_w, p,
+                        font_regular=f_text, font_bold=f_text_b, spacing=6,
+                        bold_prefixes=["Saklama koşulları:", "Parti-seri no:", "ÜRETİCİ FİRMA"]
+                    )
+                    yy += used_h
                 else:
                     wrapped = text_wrap(draw, p, f_text, block_w)
                     for ln in wrapped.splitlines():
@@ -551,34 +580,19 @@ def compose_label(
                         if yy + lh > text_top + block_h: break
                         draw.text((LEFT_MARGIN, yy), ln, font=f_text, fill=(0,0,0))
                         yy += lh
-                if yy >= text_top + block_h: break
+                i += 1
+            return yy
+
+        # Ingredients text (ALERJEN iki satır kuralı aktif)
+        ingredients = str(data.get("ingredients", "") or "").strip()
+        if ingredients:
+            yy = render_lines_with_allergen_rule(ingredients.split("\n"), yy, notes_mode=False)
             yy += 4
 
-        # Notes (+önekler bold)
+        # Notes (+önekler bold) ve ALERJEN iki satır kuralı
         notes = str(data.get("notes", "") or "").strip()
         if notes and yy < text_top + block_h:
-            bold_prefixes = ["Saklama koşulları:", "Parti-seri no:", "ÜRETİCİ FİRMA"]
-            for para in notes.split("\n"):
-                p = para.strip()
-                if not p:
-                    yy += f_text.size + 6
-                    if yy >= text_top + block_h: break
-                    continue
-                if _startswith_ci(p, "ALERJEN"):
-                    wrapped = text_wrap(draw, p, f_text_b, block_w)
-                    for ln in wrapped.splitlines():
-                        lh = f_text_b.size + 6
-                        if yy + lh > text_top + block_h: break
-                        draw.text((LEFT_MARGIN, yy), ln, font=f_text_b, fill=(0,0,0))
-                        yy += lh
-                else:
-                    used_h, _ = draw_line_with_bold_prefix(
-                        draw, LEFT_MARGIN, yy, block_w, p,
-                        font_regular=f_text, font_bold=f_text_b, spacing=6,
-                        bold_prefixes=bold_prefixes
-                    )
-                    yy += used_h
-                if yy >= text_top + block_h: break
+            yy = render_lines_with_allergen_rule(notes.split("\n"), yy, notes_mode=True)
 
     if ROTATE_180:
         canvas = canvas.rotate(180, expand=False)
