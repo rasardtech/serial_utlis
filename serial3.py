@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-# Terazi Etiket Yazıcı – Ingredients font + başlık üst güvenli boşluk
-# - Ingredients fontu büyütüldü; ingredients header bold + biraz daha büyük.
+# Terazi Etiket Yazıcı – Ingredients font + başlık üst güvenli boşluk + KAYIP FONKSIYONLAR GERİ EKLENDİ
+# - Ingredients fontu büyütüldü; ingredients header (ingredent_header/ingredient_header) bold + biraz daha büyük.
 # - İç metin daha yukarıdan başlar (ekstra boşluk azaltıldı).
 # - Başlık (ürün adı) üstten kesilmesin diye minimum üst güvenli boşluk eklendi.
 # - Adet=1 ise satır gizli; Ağırlık/S.T.T. değerleri bold ve büyük; önekler/ALERJEN bold.
+# - parse_weight_line ve stable_value yeniden eklendi (silinmesin diye belirgin yorumlar bırakıldı).
 
 import os
 import re
@@ -219,6 +220,85 @@ def send_ad2k_command(ser, command_bytes, response_timeout=0.6):
         else:
             time.sleep(0.01)
     return resp
+
+# !!! KAYBOLMASIN: Ağırlık satırlarını farklı biçimlerden çözen fonksiyon.
+def parse_weight_line(line):
+    if isinstance(line, bytes):
+        line = line.decode(errors="ignore")
+    s = (line or "").strip()
+
+    # Bilinen hatalı değer
+    if re.search(r'\b400000(?:[.,]00)?\s*g\b', s, re.IGNORECASE):
+        return None
+
+    # 1) "ST,GS, 0.123 kg" vb.
+    m = re.search(r'(?:ST|US|OL)?\s*,?\s*(?:GS|NT|TR)?\s*,?\s*([-+]?\d+(?:[.,]\d+)?)\s*(kg|g)\b', s, re.IGNORECASE)
+    if m:
+        val = m.group(1).replace(",", ".")
+        unit = m.group(2).lower()
+        try:
+            v = float(val)
+            grams = int(round(v * 1000)) if unit == "kg" else int(round(v))
+            if abs(grams) < 5 or abs(grams) > MAX_REALISTIC_GRAMS:
+                return None
+            return grams
+        except Exception:
+            pass
+
+    # 2) “0,123 kg” / “2.500 kg” / “123 g”
+    m = re.search(r'([-+]?\d+(?:[.,]\d+)?)\s*(kg|g)\b', s, re.IGNORECASE)
+    if m:
+        val = m.group(1).replace(",", ".")
+        unit = m.group(2).lower()
+        try:
+            v = float(val)
+            grams = int(round(v * 1000)) if unit == "kg" else int(round(v))
+            if abs(grams) < 5 or abs(grams) > MAX_REALISTIC_GRAMS:
+                return None
+            return grams
+        except Exception:
+            pass
+
+    # 3) “12,345” -> 12kg 345g
+    m = re.search(r'(?<!\d)(\d+),(\d{1,3})(?!\d)', s)
+    if m:
+        try:
+            whole = int(m.group(1))
+            frac = m.group(2)
+            while len(frac) < 3:
+                frac += "0"
+            frac = frac[:3]
+            grams = whole * 1000 + int(frac)
+            if grams < 5 or grams > MAX_REALISTIC_GRAMS:
+                return None
+            return grams
+        except Exception:
+            pass
+
+    # 4) Eski kalıp
+    m = re.search(r'\b0000(\d),(\d{3})', s)
+    if m:
+        kg = int(m.group(1)); gr = int(m.group(2))
+        grams = kg * 1000 + gr
+        if grams < 5 or grams > MAX_REALISTIC_GRAMS:
+            return None
+        return grams
+
+    # 5) yalın “123 g”
+    m = re.search(r'(?<!\d)(-?\d+)\s*g\b', s, re.IGNORECASE)
+    if m:
+        grams = int(m.group(1))
+        if abs(grams) < 5 or abs(grams) > MAX_REALISTIC_GRAMS:
+            return None
+        return grams
+
+    return None
+
+# !!! KAYBOLMASIN: Stabilite kontrolü.
+def stable_value(stable_queue: deque, tolerance: int) -> bool:
+    if len(stable_queue) < stable_queue.maxlen:
+        return False
+    return (max(stable_queue) - min(stable_queue)) <= tolerance
 
 # -------- Barkod (EAN-13) --------
 EAN_L = {'0': "0001101",'1': "0011001",'2': "0010011",'3': "0111101",'4': "0100011",'5': "0110001",'6': "0101111",'7': "0111011",'8': "0110111",'9': "0001011"}
@@ -819,6 +899,7 @@ class LabelApp(tk.Tk):
 
         self.log_text = tk.Text(log_tab, height=14, wrap="word", state="disabled"); self.log_text.pack(fill="both", expand=True)
         ttk.Button(log_tab, text="Günlüğü Temizle", command=self._clear_log).pack(anchor="e", padx=pad, pady=(4,0))
+
         self.raw_text = tk.Text(raw_tab, height=14, wrap="none", state="disabled"); self.raw_text.pack(fill="both", expand=True)
         ttk.Button(raw_tab, text="Ham Veriyi Temizle", command=self._clear_raw).pack(anchor="e", padx=pad, pady=(4,0))
 
@@ -1008,12 +1089,12 @@ class LabelApp(tk.Tk):
                     line, buffer = buffer.split(sep, 1)
                     if not line: continue
 
-                    weight = parse_weight_line(line)
+                    weight = parse_weight_line(line)  # <- geri eklendi
                     if weight is None: continue
 
                     self._update_weight_display(weight)
                     self.stable_queue.append(weight)
-                    is_stable = stable_value(self.stable_queue, SENSITIVITY_GRAM)
+                    is_stable = stable_value(self.stable_queue, SENSITIVITY_GRAM)  # <- geri eklendi
                     self._set_stable(is_stable)
 
                     if not self._effective_sending(): continue
