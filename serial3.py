@@ -109,7 +109,7 @@ SCL_PARITY = serial.PARITY_ODD
 SCL_TIMEOUT = 0.5
 
 # Windows'ta COM2'yi varsayılan tercih et (fallback)
-SCL_PORT_FALLBACK = "COM2" if IS_WINDOWS else "/dev/ttyUSB0"
+SCL_PORT_FALLBACK = "COM1" if IS_WINDOWS else "/dev/ttyUSB0"
 
 # =========================
 # Görsel/Raster Yardımcıları
@@ -503,8 +503,8 @@ def auto_serial_port_terazi() -> Optional[str]:
     # Windows'ta COM2'yi özellikle tercih et
     if IS_WINDOWS and ports:
         for p in ports:
-            if str(p.device).upper() == "COM2":
-                return "COM2"
+            if str(p.device).upper() == "COM1":
+                return "COM1"
 
     if not ports:
         return SCL_PORT_FALLBACK
