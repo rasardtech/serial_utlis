@@ -58,7 +58,7 @@ DEVICE_WIDTH_BYTES = 108
 DEVICE_WIDTH_DOTS  = DEVICE_WIDTH_BYTES * 8  # 864
 
 DATA_CHUNK_SIZE = 4096
-FEED_AFTER_LINES = 1  # 0..2 önerilir
+FEED_AFTER_LINES = 0  # 0..2 önerilir; 1 satır boşluk sorununu önlemek için 0 yapıldı
 
 # Tuval ve işleme
 REQ_W = 748
@@ -67,6 +67,12 @@ BOTTOM_FORBID = 120
 ROTATE_180 = True
 THRESHOLD = 192
 INVERT_BW = False
+
+# Dikey ofset (yazıyı 1 cm yukarı almak için)
+# 203dpi (8 dot/mm) varsayımıyla 1 cm = 10 mm -> 80 dot
+DPMM = 8  # 203 dpi yazıcılar için 1 mm'de ~8 dot
+SHIFT_UP_MM = 10
+SHIFT_UP_DOTS = int(round(SHIFT_UP_MM * DPMM))
 
 # Yerleşim
 TITLE_Y = 60
@@ -101,6 +107,9 @@ DEFAULT_FONT_PATH = get_default_font_path()
 SCL_BAUD = 19200
 SCL_PARITY = serial.PARITY_ODD
 SCL_TIMEOUT = 0.5
+
+# Windows'ta COM2'yi varsayılan tercih et (fallback)
+SCL_PORT_FALLBACK = "COM2" if IS_WINDOWS else "/dev/ttyUSB0"
 
 # =========================
 # Görsel/Raster Yardımcıları
@@ -265,6 +274,16 @@ def compose_label(data: Dict[str, Any], width_dots: int, height_dots: int, forbi
         canvas = canvas.rotate(180, expand=False)
     return canvas
 
+def shift_image_vertical(img: Image.Image, dy: int, fill=(255, 255, 255)) -> Image.Image:
+    """
+    Görüntüyü dikey eksende kaydırır. dy < 0 ise yukarı, dy > 0 ise aşağı kaydırır.
+    Taşan alanlar 'fill' rengiyle doldurulur.
+    """
+    w, h = img.size
+    out = Image.new(img.mode, (w, h), fill)
+    out.paste(img, (0, dy))
+    return out
+
 def to_1bit_bytes(img: Image.Image, width_dots: int, threshold: int = THRESHOLD, invert: bool = INVERT_BW) -> Tuple[bytes, int, int]:
     w, h = img.size
     assert w == width_dots, f"Image width {w} != {width_dots}"
@@ -350,6 +369,11 @@ def send_single_esc_v_height_only(ser: serial.Serial, raw_padded: bytes, rows: i
 
 def send_label_image_to_printer(ser_yazici: Optional[serial.Serial], payload: Dict[str, Any], feed_after_lines: int, preview_only: bool, on_preview_image=None):
     img = compose_label(payload, WIDTH_DOTS, HEIGHT_DOTS, BOTTOM_FORBID)
+
+    # Yazıyı 1 cm yukarı kaydır (ROTATE_180 sonrası koordinat sisteminde yukarı = negatif dy)
+    if SHIFT_UP_DOTS != 0:
+        img = shift_image_vertical(img, dy=-SHIFT_UP_DOTS, fill=(255, 255, 255))
+
     if img.size != (WIDTH_DOTS, HEIGHT_DOTS):
         img = img.resize((WIDTH_DOTS, HEIGHT_DOTS), Image.LANCZOS)
     raw_label, label_wb, rows = to_1bit_bytes(img, WIDTH_DOTS)
@@ -371,6 +395,8 @@ def send_label_image_to_printer(ser_yazici: Optional[serial.Serial], payload: Di
 
     clear_printer_buffer(ser_yazici)
     send_single_esc_v_height_only(ser_yazici, raw_padded, rows=rows)
+
+    # Ek satır besleme KAPALI (1 satır boşluk atmasın diye)
     if feed_after_lines > 0:
         ser_yazici.write(b"\n" * feed_after_lines)
         ser_yazici.flush()
@@ -458,21 +484,43 @@ def _port_matches(tokens: List[str], info) -> bool:
     return any(tok in low_fields for tok in tokens)
 
 def auto_serial_port_terazi() -> Optional[str]:
+    """
+    Terazi port seçimi:
+    1) TERAZI_PORT ortam değişkeni varsa onu kullan.
+    2) Windows'ta listelenen portlar içinde COM2 varsa onu tercih et.
+    3) Token eşleşmelerine göre akıllı seçim yap.
+    4) Hiçbiri olmazsa fallback döndür (Windows: COM2, Unix: /dev/ttyUSB0).
+    """
     env = os.getenv("TERAZI_PORT")
     if env:
         return env
-    ports = list(list_ports.comports())
+
+    try:
+        ports = list(list_ports.comports())
+    except Exception:
+        ports = []
+
+    # Windows'ta COM2'yi özellikle tercih et
+    if IS_WINDOWS and ports:
+        for p in ports:
+            if str(p.device).upper() == "COM2":
+                return "COM2"
+
     if not ports:
-        return None
+        return SCL_PORT_FALLBACK
+
     tokens_primary = ["ftdi", "ad", "terazi", "scale", "weigh"]
     tokens_secondary = ["usb", "serial", "com"]
+
     for p in ports:
         if _port_matches(tokens_primary, p):
             return p.device
     for p in ports:
         if _port_matches(tokens_secondary, p):
             return p.device
-    return ports[0].device
+
+    # Son çare: ilk port ya da fallback
+    return ports[0].device if ports else SCL_PORT_FALLBACK
 
 def auto_serial_port_yazici() -> str:
     env = os.getenv("YAZICI_PORT") or os.getenv("PRINTER_PORT")
