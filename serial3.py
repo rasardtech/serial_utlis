@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-# Terazi Etiket Yazıcı – Tek Dosya
-# - Sans Serif font (normal + bold) zorunlu kullanımı (sistem TTF taraması).
-# - Ürün adı barkod sütununda, barkodun hemen üstünde sola yaslı.
+# Terazi Etiket Yazıcı – Tek Dosya (font büyütme + canlı konum ayarı)
+# - Sans Serif font (normal + bold) zorunlu (sistem TTF taraması).
+# - Ürün adı barkodun hemen üstünde sola yaslı.
 # - “ALERJEN UYARISI …” satırı kalın (bold).
-# - Fiziksel konum kalibrasyonu: PHYS_SHIFT_DOWN_MM (dikey), H_SHIFT_MM (yatay sola).
-# - COM6 ölçek (terazi) fallback, ham veri görünümü, POLL/LISTEN okuma modları.
-# - 15 kg üzeri veya "400000.00 g" gibi hatalı ölçüleri yok say.
+# - Fiziksel konum kalibrasyonu: aşağı/sola canlı ayar (GUI butonları ve spinbox).
+# - COM6 terazi fallback, ham veri görünümü, POLL/LISTEN okuma modları.
+# - 15 kg üzeri veya "400000.00 g" gibi hatalı ölçüleri yok sayar.
 # - Odoo START/DONE ve print_series akışları.
 #
 # Gereksinimler:
 #   pip install pillow pyserial requests
 #
-# Çalıştırma sırasında ayarları hızlı denemek için:
-#   Windows PowerShell:
-#     $env:PHYS_SHIFT_DOWN_MM="6"; $env:H_SHIFT_MM="3.5"; python terazi_etiket_gui.py
-#   CMD:
-#     set PHYS_SHIFT_DOWN_MM=6 & set H_SHIFT_MM=3.5 & python terazi_etiket_gui.py
+# Hızlı kalibrasyon ipuçları:
+# - “Aşağı” istiyorsanız PHYS_SHIFT_DOWN_MM değerini büyütün (veya GUI’de “Aşağı +0.5 mm”).
+# - “Sola” istiyorsanız H_SHIFT_MM değerini büyütün (veya GUI’de “Sola +0.5 mm”).
+# - Varsayılanlar: PHYS_SHIFT_DOWN_MM=10 mm, H_SHIFT_MM=3.0 mm (GUI’den anında değişebilir).
 
 import os
 import re
@@ -88,9 +87,6 @@ LABEL_WIDTH_BYTES = WIDTH_DOTS // 8  # 94
 # 203 dpi ~ 8 dot/mm
 DPMM = 8
 
-# Fiziksel kalibrasyon (ortam değişkeni ile ezilebilir)
-# Pozitif PHYS_SHIFT_DOWN_MM = etiketi fiziksel olarak aşağı indir (mm).
-# ROTATE_180 True iken aşağı indirmek için görüntüyü ekranda yukarı kaydırmak gerekir (dy negatif).
 def _env_float(name: str, default_val: float) -> float:
     try:
         v = os.getenv(name)
@@ -98,16 +94,17 @@ def _env_float(name: str, default_val: float) -> float:
     except Exception:
         return default_val
 
-PHYS_SHIFT_DOWN_MM = _env_float("PHYS_SHIFT_DOWN_MM", _env_float("V_SHIFT_MM", 8.0))  # varsayılan 8 mm aşağı
-H_SHIFT_MM = _env_float("H_SHIFT_MM", 3.0)  # merkezden sola kaydırma (mm)
+# Varsayılan fiziksel kalibrasyon (GUI’den canlı değiştirilecek)
+PHYS_SHIFT_DOWN_MM = _env_float("PHYS_SHIFT_DOWN_MM", _env_float("V_SHIFT_MM", 10.0))  # 10 mm aşağı
+H_SHIFT_MM = _env_float("H_SHIFT_MM", 3.0)  # merkezden sola 3.0 mm
 
-PHYS_SHIFT_DOWN_DOTS = int(round(PHYS_SHIFT_DOWN_MM * DPMM))
-H_SHIFT_DOTS = int(round(H_SHIFT_MM * DPMM))
+def mm_to_dots(mm: float) -> int:
+    return int(round(mm * DPMM))
 
-# İç yerleşim (px)
-LEFT_MARGIN = 8               # içeriği biraz daha sola almak için küçük marj
-LEFT_BLOCK_Y = 140            # sol blok başlangıç yüksekliği
-LEFT_BLOCK_GAP = 44
+# İç yerleşim (px) – metin biraz büyüdüğü için blokları da hafif aşağı aldık
+LEFT_MARGIN = 8               # içeriği sola yakın başlat
+LEFT_BLOCK_Y = 148            # 140 -> 148 (biraz aşağı)
+LEFT_BLOCK_GAP = 48           # 44 -> 48 (satır arası büyüdü)
 LEFT_COL_WIDTH = 270
 COL_GAP = 16
 RIGHT_BARCODE_HEIGHT = 108
@@ -171,12 +168,13 @@ def load_font_exact(path: Optional[str], size: int) -> ImageFont.ImageFont:
             pass
     return ImageFont.load_default()
 
-def get_fonts_for_sizes(size_title=26, size_sub=22, size_label=20, size_text=16, size_bar=16, payload_font_path: Optional[str] = None):
+def get_fonts_for_sizes(size_title=30, size_sub=24, size_label=22, size_text=18, size_bar=18, payload_font_path: Optional[str] = None):
+    # font point karşılığı (~203 dpi): pt ≈ px * 72 / 203
+    # 30px≈10.65pt, 24px≈8.52pt, 22px≈7.80pt, 18px≈6.39pt (3pt sınırının oldukça üzerinde)
     normal_base = None
     bold_base = None
     if not FORCE_SANS_SERIF and payload_font_path and os.path.exists(payload_font_path):
         normal_base = payload_font_path
-        # aynı klasörde bold varyant arayalım
         base_dir = os.path.dirname(payload_font_path)
         base_name = os.path.splitext(os.path.basename(payload_font_path))[0]
         for suffix in ("-Bold.ttf", "Bold.ttf", "bd.ttf"):
@@ -294,7 +292,7 @@ def text_wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, m
 def compose_label(data: Dict[str, Any], width_dots: int, height_dots: int, forbid_bottom_px: int) -> Image.Image:
     payload_font_path = data.get("font_path")
     fonts = get_fonts_for_sizes(
-        size_title=26, size_sub=22, size_label=20, size_text=16, size_bar=16,
+        size_title=30, size_sub=24, size_label=22, size_text=18, size_bar=18,
         payload_font_path=payload_font_path
     )
     f_title = fonts["title"]; f_sub = fonts["sub"]; f_label = fonts["label"]; f_text = fonts["text"]; f_text_b = fonts["text_b"]; f_bar = fonts["bar"]
@@ -326,15 +324,15 @@ def compose_label(data: Dict[str, Any], width_dots: int, height_dots: int, forbi
     bar_top = y0
     bar_h = RIGHT_BARCODE_HEIGHT
 
-    # Ürün adı – barkodun hemen üstünde, sola yaslı; tek satıra sığması için 26→18 px arası küçült
+    # Ürün adı – barkodun hemen üstünde, sola yaslı; tek satıra sığması için 30→20 px arası küçült
     product = str(data.get("product_name", "") or "").strip()
     if product:
         size = f_title.size
         normal_path = fonts["_paths"]["normal"]
-        while size >= 18 and draw.textlength(product, font=load_font_exact(normal_path, size)) > right_w:
+        while size >= 20 and draw.textlength(product, font=load_font_exact(normal_path, size)) > right_w:
             size -= 1
         f_prod = load_font_exact(normal_path, size)
-        prod_y = max(bar_top - f_prod.size - 6, LEFT_BLOCK_Y - f_prod.size - 8)
+        prod_y = max(0, bar_top - f_prod.size - 4)  # barkodun hemen üstü, ~4 px boşluk
         draw.text((right_x, prod_y), product, font=f_prod, fill=(0,0,0))
 
     # Barkod
@@ -382,11 +380,6 @@ def compose_label(data: Dict[str, Any], width_dots: int, height_dots: int, forbi
 # Görsel kaydırma ve raster dönüşüm
 # =========================
 def shift_image_vertical(img: Image.Image, dy: int, fill=(255, 255, 255)) -> Image.Image:
-    """
-    Görüntüyü dikey eksende kaydırır.
-    dy > 0: görüntüyü aşağı kaydırır (tuvalin üstüne boşluk ekler).
-    Not: ROTATE_180=True iken 'aşağı kaydırma' fiziksel olarak ters etki yapar.
-    """
     w, h = img.size
     out = Image.new(img.mode, (w, h), fill)
     out.paste(img, (0, dy))
@@ -482,8 +475,8 @@ def send_label_image_to_printer(ser_yazici: Optional[serial.Serial], payload: Di
     img = compose_label(payload, WIDTH_DOTS, HEIGHT_DOTS, BOTTOM_FORBID)
 
     # Fiziksel aşağı indirme (mm → dot). ROTATE_180=True iken fiziksel aşağı = dy negatif.
-    if PHYS_SHIFT_DOWN_DOTS != 0:
-        dy = (-PHYS_SHIFT_DOWN_DOTS) if ROTATE_180 else (+PHYS_SHIFT_DOWN_DOTS)
+    if PHYS_SHIFT_DOWN_MM != 0:
+        dy = (-mm_to_dots(PHYS_SHIFT_DOWN_MM)) if ROTATE_180 else (mm_to_dots(PHYS_SHIFT_DOWN_MM))
         img = shift_image_vertical(img, dy=dy, fill=(255, 255, 255))
 
     # Raster’a çevir
@@ -494,7 +487,7 @@ def send_label_image_to_printer(ser_yazici: Optional[serial.Serial], payload: Di
     # Yatay sola kaydırma (merkezden)
     raw_padded = pad_rows_to_device_width(
         raw_label, label_wb=label_wb, device_wb=DEVICE_WIDTH_BYTES, rows=rows,
-        align="center", left_shift_dots=H_SHIFT_DOTS
+        align="center", left_shift_dots=mm_to_dots(H_SHIFT_MM)
     )
 
     # Önizleme artefaktları
@@ -692,8 +685,8 @@ class LabelApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Terazi Etiket Yazıcı")
-        self.geometry("1080x780")
-        self.minsize(980, 680)
+        self.geometry("1120x820")
+        self.minsize(980, 700)
 
         # Paylaşılan durum
         self.stop_event = threading.Event()
@@ -731,6 +724,10 @@ class LabelApp(tk.Tk):
         self.poll_mode = tk.BooleanVar(value=True)          # True: komutla poll, False: ham dinle
         self.show_raw = tk.BooleanVar(value=True)           # Ham veri penceresi
 
+        # Fiziksel ayarların canlı kontrolü
+        self.vert_mm_var = tk.DoubleVar(value=PHYS_SHIFT_DOWN_MM)
+        self.horz_mm_var = tk.DoubleVar(value=H_SHIFT_MM)
+
         # Önizleme
         self.preview_canvas = None
         self.preview_photo = None
@@ -745,7 +742,7 @@ class LabelApp(tk.Tk):
 
         # Başlangıç log
         self._log(f"Sans Serif -> normal: {SANS_NORMAL_PATH or '(yok)'} | bold: {SANS_BOLD_PATH or '(yok)'} | FORCE_SANS_SERIF={FORCE_SANS_SERIF}")
-        self._log(f"Fiziksel ofset: aşağı={PHYS_SHIFT_DOWN_MM} mm, sola={H_SHIFT_MM} mm (env: PHYS_SHIFT_DOWN_MM, H_SHIFT_MM)")
+        self._log(f"Fiziksel ofset başlangıç: aşağı={self.vert_mm_var.get()} mm, sola={self.horz_mm_var.get()} mm")
 
         self.after(100, self._gui_pulse)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -779,6 +776,21 @@ class LabelApp(tk.Tk):
         ttk.Radiobutton(settings, text="POLL (Komutla)", variable=self.poll_mode, value=True).grid(row=0, column=7, sticky="w")
         ttk.Radiobutton(settings, text="LISTEN (Ham Dinle)", variable=self.poll_mode, value=False).grid(row=0, column=8, sticky="w", padx=(4,0))
         ttk.Checkbutton(settings, text="Ham Veriyi Göster", variable=self.show_raw).grid(row=0, column=9, padx=(16,0))
+
+        # Konum kalibrasyonu paneli
+        cal = ttk.LabelFrame(self, text="Fiziksel Konum Kalibrasyonu (mm)")
+        cal.pack(fill="x", padx=pad, pady=(0, pad))
+        ttk.Label(cal, text="Aşağı (+mm):").grid(row=0, column=0, sticky="e")
+        ttk.Spinbox(cal, from_=0, to=30, increment=0.5, textvariable=self.vert_mm_var, width=6).grid(row=0, column=1, padx=(4,16))
+        ttk.Label(cal, text="Sola (+mm):").grid(row=0, column=2, sticky="e")
+        ttk.Spinbox(cal, from_=0, to=30, increment=0.5, textvariable=self.horz_mm_var, width=6).grid(row=0, column=3, padx=(4,16))
+        ttk.Button(cal, text="Uygula", command=self._apply_physical_shifts).grid(row=0, column=4, padx=(4,12))
+
+        # Hızlı nudge
+        ttk.Button(cal, text="Aşağı +0.5", command=lambda: self._nudge(0.5, 0)).grid(row=0, column=5, padx=2)
+        ttk.Button(cal, text="Yukarı -0.5", command=lambda: self._nudge(-0.5, 0)).grid(row=0, column=6, padx=2)
+        ttk.Button(cal, text="Sola +0.5", command=lambda: self._nudge(0, 0.5)).grid(row=0, column=7, padx=2)
+        ttk.Button(cal, text="Sağa -0.5", command=lambda: self._nudge(0, -0.5)).grid(row=0, column=8, padx=2)
 
         mid = ttk.Frame(self)
         mid.pack(fill="x", padx=pad)
@@ -815,7 +827,7 @@ class LabelApp(tk.Tk):
         right = ttk.LabelFrame(self, text="Önizleme ve Kayıtlar")
         right.pack(fill="both", expand=True, padx=pad, pady=(0, pad))
 
-        self.preview_canvas = tk.Canvas(right, width=360, height=360, bg="#f2f2f2", highlightthickness=1, relief="sunken")
+        self.preview_canvas = tk.Canvas(right, width=380, height=380, bg="#f2f2f2", highlightthickness=1, relief="sunken")
         self.preview_canvas.pack(side="left", padx=pad, pady=pad)
 
         nb = ttk.Notebook(right)
@@ -890,6 +902,18 @@ class LabelApp(tk.Tk):
                 self._log(f"Yazıcı bağlandı: {prn}")
             except Exception as e:
                 self._log(f"Yazıcı bağlanamadı ({prn}): {e}")
+
+    # ---------- Fiziksel konum uygulama ----------
+    def _apply_physical_shifts(self):
+        global PHYS_SHIFT_DOWN_MM, H_SHIFT_MM
+        PHYS_SHIFT_DOWN_MM = max(0.0, float(self.vert_mm_var.get()))
+        H_SHIFT_MM = max(0.0, float(self.horz_mm_var.get()))
+        self._log(f"Fiziksel ofset uygulandı: aşağı={PHYS_SHIFT_DOWN_MM:.2f} mm, sola={H_SHIFT_MM:.2f} mm")
+
+    def _nudge(self, d_down_mm: float, d_left_mm: float):
+        self.vert_mm_var.set(max(0.0, self.vert_mm_var.get() + d_down_mm))
+        self.horz_mm_var.set(max(0.0, self.horz_mm_var.get() + d_left_mm))
+        self._apply_physical_shifts()
 
     # ---------- GUI olayları ----------
     def _do_tare(self):
@@ -993,7 +1017,7 @@ class LabelApp(tk.Tk):
                             continue
 
                         payload = {**payload_from_odoo, **payload_override}
-                        if not payload.get("font_path") and FORCE_SANS_SERIF:
+                        if FORCE_SANS_SERIF and not payload.get("font_path"):
                             payload["font_path"] = SANS_NORMAL_PATH
 
                         eff_copies = copies if copies > 0 else self._compute_copies({}, resp_copies, payload)
